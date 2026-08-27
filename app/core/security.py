@@ -9,11 +9,16 @@ from app.core.config import settings
 password_hash = PasswordHash.recommended()
 
 
-def hash_password(password: str) -> str:
+def hash_password(
+    password: str,
+) -> str:
     return password_hash.hash(password)
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
+def verify_password(
+    plain_password: str,
+    hashed_password: str,
+) -> bool:
     return password_hash.verify(
         plain_password,
         hashed_password,
@@ -24,10 +29,15 @@ def create_access_token(
     user_id: int,
     role: str,
 ) -> tuple[str, int]:
-    expires_minutes = settings.access_token_expire_minutes
+    expires_minutes = (
+        settings.access_token_expire_minutes
+    )
 
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=expires_minutes
+    expire = (
+        datetime.now(timezone.utc)
+        + timedelta(
+            minutes=expires_minutes
+        )
     )
 
     payload = {
@@ -45,9 +55,13 @@ def create_access_token(
     return token, expires_minutes
 
 
-def decode_access_token(token: str) -> dict:
+def decode_access_token(
+    token: str,
+) -> dict:
     return jwt.decode(
         token,
         settings.jwt_secret_key,
-        algorithms=[settings.jwt_algorithm],
+        algorithms=[
+            settings.jwt_algorithm
+        ],
     )
