@@ -1,21 +1,24 @@
 from fastapi import FastAPI
 
+from app.api.router import api_router
+from app.core.config import settings
+
+
 app = FastAPI(
-    title="ReefCare MY API",
+    title=settings.app_name,
     description="Backend API for ReefCare MY",
-    version="0.1.0"
+    version="0.1.0",
 )
 
 
 @app.get("/")
-def root():
+async def root():
     return {
         "message": "ReefCare MY backend is running"
     }
 
 
-@app.get("/health")
-def health_check():
-    return {
-        "status": "ok"
-    }
+app.include_router(
+    api_router,
+    prefix=settings.api_v1_prefix,
+)
