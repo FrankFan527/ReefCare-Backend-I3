@@ -4,6 +4,7 @@ from app.api.routes import (
     auth,
     coordinator,
     health,
+    reference,
 )
 
 
@@ -23,6 +24,11 @@ api_router.include_router(
     tags=["Coordinator"],
 )
 
+api_router.include_router(
+    reference.router,
+    prefix="/reference",
+    tags=["Reference"],
+)
 
 api_router.include_router(
     health.router,
