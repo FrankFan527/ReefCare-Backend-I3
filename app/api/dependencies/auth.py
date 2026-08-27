@@ -12,7 +12,17 @@ oauth2_scheme = OAuth2PasswordBearer(
 )
 
 
-def validate_session(token: str) -> dict:
+def validate_session(
+    token: str,
+) -> dict:
+    """
+    Decode and validate the JWT.
+
+    Expected claims:
+    - sub: app_user.user_id
+    - role: app_role.code
+    """
+
     try:
         payload = decode_access_token(token)
 
@@ -25,8 +35,16 @@ def validate_session(token: str) -> dict:
                 detail="Invalid authentication credentials",
             )
 
+        try:
+            parsed_user_id = int(user_id)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+            )
+
         return {
-            "user_id": int(user_id),
+            "user_id": parsed_user_id,
             "role": role,
         }
 
@@ -44,7 +62,10 @@ def validate_session(token: str) -> dict:
 
 
 def require_authentication(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    token: Annotated[
+        str,
+        Depends(oauth2_scheme),
+    ],
 ) -> dict:
     return validate_session(token)
 

@@ -1,5 +1,8 @@
 from app.core.exceptions import AuthenticationError
-from app.core.security import create_access_token, verify_password
+from app.core.security import (
+    create_access_token,
+    verify_password,
+)
 
 
 def authenticate_user(
@@ -7,21 +10,36 @@ def authenticate_user(
     password: str,
 ):
     if user is None:
-        raise AuthenticationError("Invalid credentials")
+        raise AuthenticationError(
+            "Invalid credentials"
+        )
 
-    if not verify_password(password, user.password_hash):
-        raise AuthenticationError("Invalid credentials")
+    if not user["password_hash"]:
+        raise AuthenticationError(
+            "Invalid credentials"
+        )
 
-    if not user.is_active:
-        raise AuthenticationError("Invalid credentials")
+    if not verify_password(
+        password,
+        user["password_hash"],
+    ):
+        raise AuthenticationError(
+            "Invalid credentials"
+        )
+
+    if not user["is_active"]:
+        raise AuthenticationError(
+            "Invalid credentials"
+        )
 
     return user
 
 
-def issue_session(user) -> tuple[str, int]:
-    token, expires_in = create_access_token(
-        user_id=user.id,
-        role=user.role.value,
+def issue_session(
+    user_id: int,
+    role_code: str,
+) -> tuple[str, int]:
+    return create_access_token(
+        user_id=user_id,
+        role=role_code,
     )
-
-    return token, expires_in
