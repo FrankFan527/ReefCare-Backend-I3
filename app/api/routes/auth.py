@@ -1,14 +1,26 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+)
 from fastapi.security import OAuth2PasswordRequestForm
-from fastapi import Depends
-from sqlalchemy import text
 
-from app.api.dependencies.auth import CurrentUserClaims
-from app.api.dependencies.db import DatabaseSession
-from app.core.exceptions import AuthenticationError
+from app.api.dependencies.auth import (
+    CurrentUserClaims,
+)
+from app.api.dependencies.db import (
+    DatabaseSession,
+)
+from app.core.exceptions import (
+    AuthenticationError,
+)
+from app.repositories.auth_repository import (
+    get_user_by_email,
+    get_user_by_id,
+)
 from app.schemas.auth import (
     AuthResponse,
-    TokenResponse,
     UserResponse,
 )
 from app.services.auth_service import (
@@ -31,33 +43,17 @@ async def login(
     """
     Authenticate a ReefCare user.
 
-    Swagger/OAuth2 uses the `username` field.
-    For ReefCare, username is interpreted as email.
+    OAuth2 uses the `username` field.
+    For ReefCare, username is interpreted as the user's email.
+
+    The access token is returned at the top level so that
+    Swagger UI can correctly use the OAuth2 password flow.
     """
 
-    result = await db.execute(
-        text(
-            """
-            SELECT
-                u.user_id,
-                u.email,
-                u.display_name,
-                u.password_hash,
-                u.is_active,
-                r.code AS role_code
-            FROM app_user u
-            JOIN app_role r
-                ON r.role_id = u.role_id
-            WHERE u.email = :email
-            LIMIT 1
-            """
-        ),
-        {
-            "email": form_data.username,
-        },
+    user = await get_user_by_email(
+        db=db,
+        email=form_data.username,
     )
-
-    user = result.mappings().first()
 
     try:
         authenticated_user = authenticate_user(
@@ -70,16 +66,21 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
             headers={
-                "WWW-Authenticate": "Bearer"
+                "WWW-Authenticate": "Bearer",
             },
         ) from exc
 
     token, expires_in = issue_session(
         user_id=authenticated_user["user_id"],
-        role_code=authenticated_user["role_code"],
+        role_code=authenticated_user[
+            "role_code"
+        ],
     )
 
     return AuthResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=expires_in,
         user=UserResponse(
             id=authenticated_user["user_id"],
             display_name=authenticated_user[
@@ -88,11 +89,6 @@ async def login(
             role=authenticated_user[
                 "role_code"
             ],
-        ),
-        session=TokenResponse(
-            access_token=token,
-            token_type="bearer",
-            expires_in=expires_in,
         ),
     )
 
@@ -105,32 +101,25 @@ async def get_current_user(
     current_user: CurrentUserClaims,
     db: DatabaseSession,
 ):
-    result = await db.execute(
-        text(
-            """
-            SELECT
-                u.user_id,
-                u.display_name,
-                r.code AS role_code
-            FROM app_user u
-            JOIN app_role r
-                ON r.role_id = u.role_id
-            WHERE u.user_id = :user_id
-              AND u.is_active = TRUE
-            LIMIT 1
-            """
-        ),
-        {
-            "user_id": current_user["user_id"],
-        },
+    """
+    Return the currently authenticated ReefCare user.
+    """
+
+    user = await get_user_by_id(
+        db=db,
+        user_id=current_user["user_id"],
     )
 
-    user = result.mappings().first()
-
-    if user is None:
+    if (
+        user is None
+        or not user["is_active"]
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authenticated user no longer exists",
+            detail=(
+                "Authenticated user is no "
+                "longer available"
+            ),
         )
 
     return UserResponse(
