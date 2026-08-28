@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def list_available_dive_sites(db: AsyncSession) -> list:
+async def list_active_dive_sites(db: AsyncSession) -> list:
     """
     Return the named dive sites an observer may select from.
 
