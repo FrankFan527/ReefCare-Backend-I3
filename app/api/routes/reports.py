@@ -21,6 +21,7 @@ from app.schemas.report import (
 )
 from app.services.evidence_service import (
     EvidenceStorageError,
+    EvidenceTooLargeError,
     EvidenceValidationError,
 )
 from app.services.report_service import (
@@ -67,6 +68,14 @@ async def submit_report(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=exc.errors(),
+        ) from exc
+
+    except EvidenceTooLargeError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            ),
+            detail=str(exc),
         ) from exc
 
     except (

@@ -21,6 +21,10 @@ class EvidenceValidationError(ValueError):
     """
 
 
+class EvidenceTooLargeError(EvidenceValidationError):
+    pass
+
+
 class EvidenceStorageError(Exception):
     """
     Raised when evidence cannot be written to private storage.
@@ -141,9 +145,9 @@ async def validate_photo(
         )
 
     if len(content) > MAX_PHOTO_BYTES:
-        raise EvidenceValidationError(
-            "Photo exceeds the maximum allowed size "
-            "of 10 MB"
+        raise EvidenceTooLargeError(
+            f"Photo exceeds the maximum allowed size "
+            f"of {MAX_PHOTO_BYTES // (1024 * 1024)} MB"
         )
 
     _validate_file_signature(
