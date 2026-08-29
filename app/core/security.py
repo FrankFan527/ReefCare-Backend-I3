@@ -1,4 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
+from uuid import uuid4
 
 import jwt
 from pwdlib import PasswordHash
@@ -12,7 +17,9 @@ password_hash = PasswordHash.recommended()
 def hash_password(
     password: str,
 ) -> str:
-    return password_hash.hash(password)
+    return password_hash.hash(
+        password
+    )
 
 
 def verify_password(
@@ -33,17 +40,20 @@ def create_access_token(
         settings.access_token_expire_minutes
     )
 
-    expire = (
-        datetime.now(timezone.utc)
-        + timedelta(
-            minutes=expires_minutes
-        )
+    now = datetime.now(
+        timezone.utc
+    )
+
+    expire = now + timedelta(
+        minutes=expires_minutes
     )
 
     payload = {
         "sub": str(user_id),
         "role": role,
+        "iat": now,
         "exp": expire,
+        "jti": str(uuid4()),
     }
 
     token = jwt.encode(
@@ -62,6 +72,15 @@ def decode_access_token(
         token,
         settings.jwt_secret_key,
         algorithms=[
-            settings.jwt_algorithm
+            settings.jwt_algorithm,
         ],
+        options={
+            "require": [
+                "sub",
+                "role",
+                "iat",
+                "exp",
+                "jti",
+            ],
+        },
     )

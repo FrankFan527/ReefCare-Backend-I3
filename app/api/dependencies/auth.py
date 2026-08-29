@@ -1,10 +1,24 @@
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import (
+    Depends,
+    HTTPException,
+    status,
+)
+from fastapi.security import (
+    OAuth2PasswordBearer,
+)
 
-from app.core.security import decode_access_token
+from app.api.dependencies.db import (
+    DatabaseSession,
+)
+from app.core.security import (
+    decode_access_token,
+)
+from app.repositories.auth_repository import (
+    get_user_by_id,
+)
 
 
 oauth2_scheme = OAuth2PasswordBearer(
@@ -12,62 +26,147 @@ oauth2_scheme = OAuth2PasswordBearer(
 )
 
 
-def validate_session(
+async def validate_session(
     token: str,
+    db: DatabaseSession,
 ) -> dict:
     """
-    Decode and validate the JWT.
+    Validate both the signed JWT and the current database
+    account state.
 
-    Expected claims:
-    - sub: app_user.user_id
-    - role: app_role.code
+    The database remains authoritative for whether the user
+    is active and which role the user currently holds.
     """
 
     try:
-        payload = decode_access_token(token)
+        payload = decode_access_token(
+            token
+        )
 
-        user_id = payload.get("sub")
-        role = payload.get("role")
+        subject = payload.get("sub")
+        token_role = payload.get("role")
 
-        if user_id is None or role is None:
+        if (
+            subject is None
+            or token_role is None
+        ):
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
+                status_code=(
+                    status.HTTP_401_UNAUTHORIZED
+                ),
+                detail=(
+                    "Invalid authentication "
+                    "credentials"
+                ),
+                headers={
+                    "WWW-Authenticate": "Bearer",
+                },
             )
 
         try:
-            parsed_user_id = int(user_id)
-        except (TypeError, ValueError):
+            user_id = int(subject)
+
+        except (
+            TypeError,
+            ValueError,
+        ) as exc:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
+                status_code=(
+                    status.HTTP_401_UNAUTHORIZED
+                ),
+                detail=(
+                    "Invalid authentication "
+                    "credentials"
+                ),
+                headers={
+                    "WWW-Authenticate": "Bearer",
+                },
+            ) from exc
+
+        user = await get_user_by_id(
+            db=db,
+            user_id=user_id,
+        )
+
+        if (
+            user is None
+            or not user["is_active"]
+        ):
+            raise HTTPException(
+                status_code=(
+                    status.HTTP_401_UNAUTHORIZED
+                ),
+                detail=(
+                    "Authentication is no longer valid"
+                ),
+                headers={
+                    "WWW-Authenticate": "Bearer",
+                },
+            )
+
+        current_role = user[
+            "role_code"
+        ]
+
+        if current_role != token_role:
+            raise HTTPException(
+                status_code=(
+                    status.HTTP_401_UNAUTHORIZED
+                ),
+                detail=(
+                    "Authentication is no longer valid"
+                ),
+                headers={
+                    "WWW-Authenticate": "Bearer",
+                },
             )
 
         return {
-            "user_id": parsed_user_id,
-            "role": role,
+            "user_id": user["user_id"],
+            "role": current_role,
+            "display_name": user[
+                "display_name"
+            ],
         }
 
-    except jwt.ExpiredSignatureError:
+    except jwt.ExpiredSignatureError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication token has expired",
-        )
+            status_code=(
+                status.HTTP_401_UNAUTHORIZED
+            ),
+            detail=(
+                "Authentication token has expired"
+            ),
+            headers={
+                "WWW-Authenticate": "Bearer",
+            },
+        ) from exc
 
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
+            status_code=(
+                status.HTTP_401_UNAUTHORIZED
+            ),
+            detail=(
+                "Invalid authentication credentials"
+            ),
+            headers={
+                "WWW-Authenticate": "Bearer",
+            },
+        ) from exc
 
 
-def require_authentication(
+async def require_authentication(
     token: Annotated[
         str,
         Depends(oauth2_scheme),
     ],
+    db: DatabaseSession,
 ) -> dict:
-    return validate_session(token)
+    return await validate_session(
+        token=token,
+        db=db,
+    )
 
 
 CurrentUserClaims = Annotated[

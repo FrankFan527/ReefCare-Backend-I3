@@ -1,31 +1,27 @@
 from datetime import datetime
 
-from pydantic import BaseModel
-
 from app.core.enums import CaseStatus
+from app.schemas.common import APIModel
 
 
-class CaseOwnerResponse(BaseModel):
+class CaseOwnerResponse(APIModel):
     id: int
     display_name: str
 
 
-class CoordinatorQueueItem(BaseModel):
-    report_id: int
+class CoordinatorQueueItem(APIModel):
     report_reference: str
 
     threat: str
     area: str | None = None
 
-    # v_unclaimed_queue currently exposes
-    # case_status.internal_label.
     status_label: str
 
     submitted_at: datetime
     hours_in_queue: int
 
 
-class CoordinatorQueueResponse(BaseModel):
+class CoordinatorQueueResponse(APIModel):
     items: list[CoordinatorQueueItem]
 
     page: int
@@ -33,8 +29,7 @@ class CoordinatorQueueResponse(BaseModel):
     total: int
 
 
-class ClaimedCaseResponse(BaseModel):
-    report_id: int
+class ClaimedCaseResponse(APIModel):
     report_reference: str
 
     owner: CaseOwnerResponse
@@ -45,7 +40,7 @@ class ClaimedCaseResponse(BaseModel):
     claimed_at: datetime
 
 
-class PreciseLocationResponse(BaseModel):
+class PreciseLocationResponse(APIModel):
     latitude: float | None = None
     longitude: float | None = None
 
@@ -56,7 +51,7 @@ class PreciseLocationResponse(BaseModel):
     relocation_notes: str | None = None
 
 
-class EvidenceSummary(BaseModel):
+class EvidenceSummary(APIModel):
     evidence_id: int
     media_type: str
 
@@ -64,8 +59,7 @@ class EvidenceSummary(BaseModel):
     uploaded_at: datetime
 
 
-class CoordinatorCaseResponse(BaseModel):
-    report_id: int
+class CoordinatorCaseResponse(APIModel):
     report_reference: str
 
     observer_id: int
@@ -86,4 +80,4 @@ class CoordinatorCaseResponse(BaseModel):
 
     owner: CaseOwnerResponse
 
-    evidence: list[EvidenceSummary] = []
+    evidence: list[EvidenceSummary]
