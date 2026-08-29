@@ -19,19 +19,23 @@ from app.api.dependencies.rate_limit import (
 )
 from app.core.exceptions import (
     AuthenticationError,
+    ConflictError,
+    DatabaseOperationError,
 )
 from app.repositories.auth_repository import (
     get_user_by_email,
 )
 from app.schemas.auth import (
     AuthResponse,
+    RegistrationCreate,
+    RegistrationResponse,
     UserResponse,
 )
 from app.services.auth_service import (
     authenticate_user,
     issue_session,
+    register_observer,
 )
-
 
 router = APIRouter()
 
@@ -117,4 +121,54 @@ async def get_current_user(
             "display_name"
         ],
         role=current_user["role"],
+    )
+
+
+@router.post(
+    "/register",
+    response_model=RegistrationResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(apply_login_rate_limit),
+    ],
+)
+async def register(
+    the_registration_input: RegistrationCreate,
+    db: DatabaseSession,
+):
+    """
+    Create a self-registered observer account.
+
+    Always creates an observer. There is no role field in the request, and the
+    repository resolves the role from app_role rather than taking it as a
+    parameter, so no caller can register as a coordinator.
+
+    No token is returned. The client calls POST /auth/login next.
+    """
+
+    try:
+        the_created_user = await register_observer(
+            db=db,
+            email=the_registration_input.email,
+            display_name=the_registration_input.display_name,
+            password=the_registration_input.password,
+        )
+
+    except ConflictError as the_error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(the_error),
+        ) from the_error
+
+    except DatabaseOperationError as the_error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The account could not be created",
+        ) from the_error
+
+    return RegistrationResponse(
+        id=the_created_user["id"],
+        email=the_created_user["email"],
+        display_name=the_created_user["display_name"],
+        role=the_created_user["role"],
     )

@@ -75,3 +75,51 @@ async def get_user_by_id(
     )
 
     return result.mappings().first()
+
+async def create_observer_user(
+    db: AsyncSession,
+    email: str,
+    display_name: str,
+    password_hash: str,
+):
+    """
+    Insert one self-registered account.
+
+    SECURITY: the role is resolved inside the statement by looking up
+    app_role.code = 'observer'. It is not a parameter, so no caller can create
+    a coordinator or administrator through this path even by mistake.
+
+    The email UNIQUE constraint is the authoritative duplicate check. email is
+    citext, so the comparison is case-insensitive and Aisha@example.com
+    collides with aisha@example.com without any lowercasing here.
+
+    The caller commits.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            INSERT INTO app_user
+                (role_id, email, display_name, password_hash, is_active)
+            SELECT
+                r.role_id,
+                :email,
+                :display_name,
+                :password_hash,
+                TRUE
+            FROM app_role r
+            WHERE r.code = 'observer'
+            RETURNING
+                user_id,
+                email,
+                display_name
+            """
+        ),
+        {
+            "email": email,
+            "display_name": display_name,
+            "password_hash": password_hash,
+        },
+    )
+
+    return result.mappings().first()
