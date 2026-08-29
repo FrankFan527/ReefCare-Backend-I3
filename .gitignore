@@ -12,3 +12,5 @@ __pycache__/
 .idea/
 
 .DS_Store
+
+private_evidence/

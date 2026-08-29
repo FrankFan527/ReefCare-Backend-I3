@@ -6,6 +6,7 @@ from app.api.routes import (
     dive_sessions,
     health,
     reference,
+    reports,
 )
 
 
@@ -40,4 +41,18 @@ api_router.include_router(
 api_router.include_router(
     health.router,
     tags=["Health"],
+)
+
+
+api_router.include_router(
+    reference.router,
+    prefix="/reference",
+    tags=["Reference"],
+)
+
+
+api_router.include_router(
+    reports.router,
+    prefix="/reports",
+    tags=["Reports"],
 )

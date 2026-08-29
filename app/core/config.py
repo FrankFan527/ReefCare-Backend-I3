@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     # Database
     database_url: str
 
+    evidence_storage_dir: str = (
+        "./private_evidence"
+    )
+    
     # JWT
     jwt_secret_key: str = Field(
         min_length=32,
