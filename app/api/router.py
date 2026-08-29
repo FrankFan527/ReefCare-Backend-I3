@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     auth,
     coordinator,
+    dive_sessions,
     health,
     reference,
     reports,
@@ -25,6 +26,17 @@ api_router.include_router(
     tags=["Coordinator"],
 )
 
+api_router.include_router(
+    reference.router,
+    prefix="/reference",
+    tags=["Reference"],
+)
+
+api_router.include_router(
+    dive_sessions.router,
+    prefix="/dive-sessions",
+    tags=["Dive Sessions"],
+)
 
 api_router.include_router(
     health.router,
