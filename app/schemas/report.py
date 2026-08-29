@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
 from app.core.enums import CaseStatus
 from app.schemas.common import APIModel
 
-class MapPinInput(BaseModel):
+class MapPinInput(APIModel):
     latitude: float = Field(
         ge=-90,
         le=90,
@@ -16,7 +16,7 @@ class MapPinInput(BaseModel):
         le=180,
     )
 
-class ObservationLocationInput(BaseModel):
+class ObservationLocationInput(APIModel):
     named_dive_site_id: int = Field(
         gt=0
     )
@@ -33,7 +33,7 @@ class ObservationLocationInput(BaseModel):
         max_length=1000,
     )
 
-class ReportCreate(BaseModel):
+class ReportCreate(APIModel):
     threat_category_id: int = Field(
         gt=0
     )
@@ -79,7 +79,7 @@ class ReportCreate(BaseModel):
 
         return self
 
-class ThreatCategoryResponse(BaseModel):
+class ThreatCategoryResponse(APIModel):
     threat_category_id: int
     code: str
     label: str
@@ -90,7 +90,7 @@ class ThreatCategoryResponse(BaseModel):
     icon_reference: str | None = None
 
 
-class ReportSubmittedResponse(BaseModel):
+class ReportSubmittedResponse(APIModel):
     report_reference: str
     status: str
 
