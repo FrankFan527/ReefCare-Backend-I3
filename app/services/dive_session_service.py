@@ -1,19 +1,40 @@
 # ---------------------------------------------------------------------------
 # Dive Session workflow (US4.1).
 #
-# Services own workflow and policy; repositories own SQL. This module decides
-# what a valid session looks like and what to call it, then hands the values
-# to the repository to persist.
+# Services own workflow and transaction boundaries; repositories own SQL.
+# The route below this layer only maps domain exceptions onto status codes,
+# matching the pattern in case_service and case_ownership_service.
 # ---------------------------------------------------------------------------
 from datetime import date
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import DatabaseOperationError, NotFoundError
 from app.repositories.dive_session_repository import (
     count_sessions_on_date,
+    create_dive_session,
     dive_site_exists,
+    list_my_dive_sessions,
 )
+
+
+async def get_my_dive_sessions(
+    db: AsyncSession,
+    observer_id: int,
+) -> list:
+    """
+    Return the dive sessions belonging to one observer.
+
+    Read-only, so no transaction handling is needed. The observer filter is
+    applied in SQL inside the repository rather than here, so a row that is
+    not the caller's is never loaded in the first place.
+    """
+
+    return await list_my_dive_sessions(
+        db=db,
+        observer_id=observer_id,
+    )
 
 
 async def validate_dive_session(
@@ -64,3 +85,59 @@ async def generate_session_label(
     )
 
     return f"Dive {the_existing_session_count + 1}"
+
+
+async def create_my_dive_session(
+    db: AsyncSession,
+    observer_id: int,
+    named_dive_site_id: int,
+    dive_date: date,
+    label: str | None = None,
+    approximate_start_time=None,
+    approximate_end_time=None,
+) -> dict:
+    """
+    Create one dive session owned by this observer.
+
+    Owns the whole unit of work: validation, labelling, insert and commit.
+    The observer id is passed in from the verified token, never taken from
+    the request body, so a session cannot be created for somebody else.
+
+    A blank label is treated the same as no label. A client sending an empty
+    string means "I did not name this dive", not "name it nothing".
+    """
+
+    await validate_dive_session(
+        db=db,
+        named_dive_site_id=named_dive_site_id,
+    )
+
+    the_session_label = label
+
+    if the_session_label is None or the_session_label.strip() == "":
+        the_session_label = await generate_session_label(
+            db=db,
+            observer_id=observer_id,
+            dive_date=dive_date,
+        )
+
+    try:
+        the_created_row = await create_dive_session(
+            db=db,
+            observer_id=observer_id,
+            dive_site_id=named_dive_site_id,
+            dive_date=dive_date,
+            session_label=the_session_label,
+            time_in=approximate_start_time,
+            time_out=approximate_end_time,
+        )
+
+        await db.commit()
+
+    except SQLAlchemyError as the_error:
+        await db.rollback()
+        raise DatabaseOperationError(
+            "The dive session could not be created"
+        ) from the_error
+
+    return dict(the_created_row)
