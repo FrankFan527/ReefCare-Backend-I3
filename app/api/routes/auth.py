@@ -4,7 +4,9 @@ from fastapi import (
     HTTPException,
     status,
 )
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import (
+    OAuth2PasswordRequestForm,
+)
 
 from app.api.dependencies.auth import (
     CurrentUserClaims,
@@ -12,12 +14,14 @@ from app.api.dependencies.auth import (
 from app.api.dependencies.db import (
     DatabaseSession,
 )
+from app.api.dependencies.rate_limit import (
+    apply_login_rate_limit,
+)
 from app.core.exceptions import (
     AuthenticationError,
 )
 from app.repositories.auth_repository import (
     get_user_by_email,
-    get_user_by_id,
 )
 from app.schemas.auth import (
     AuthResponse,
@@ -35,19 +39,18 @@ router = APIRouter()
 @router.post(
     "/login",
     response_model=AuthResponse,
+    dependencies=[
+        Depends(apply_login_rate_limit),
+    ],
 )
 async def login(
     db: DatabaseSession,
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
     """
-    Authenticate a ReefCare user.
+    Authenticate a ReefCare account.
 
-    OAuth2 uses the `username` field.
-    For ReefCare, username is interpreted as the user's email.
-
-    The access token is returned at the top level so that
-    Swagger UI can correctly use the OAuth2 password flow.
+    OAuth2 username is interpreted as the account email.
     """
 
     user = await get_user_by_email(
@@ -71,7 +74,9 @@ async def login(
         ) from exc
 
     token, expires_in = issue_session(
-        user_id=authenticated_user["user_id"],
+        user_id=authenticated_user[
+            "user_id"
+        ],
         role_code=authenticated_user[
             "role_code"
         ],
@@ -82,7 +87,9 @@ async def login(
         token_type="bearer",
         expires_in=expires_in,
         user=UserResponse(
-            id=authenticated_user["user_id"],
+            id=authenticated_user[
+                "user_id"
+            ],
             display_name=authenticated_user[
                 "display_name"
             ],
@@ -99,31 +106,15 @@ async def login(
 )
 async def get_current_user(
     current_user: CurrentUserClaims,
-    db: DatabaseSession,
 ):
     """
-    Return the currently authenticated ReefCare user.
+    Return the currently authenticated safe user projection.
     """
 
-    user = await get_user_by_id(
-        db=db,
-        user_id=current_user["user_id"],
-    )
-
-    if (
-        user is None
-        or not user["is_active"]
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=(
-                "Authenticated user is no "
-                "longer available"
-            ),
-        )
-
     return UserResponse(
-        id=user["user_id"],
-        display_name=user["display_name"],
-        role=user["role_code"],
+        id=current_user["user_id"],
+        display_name=current_user[
+            "display_name"
+        ],
+        role=current_user["role"],
     )
