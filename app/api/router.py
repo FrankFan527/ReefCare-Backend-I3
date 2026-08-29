@@ -2,13 +2,13 @@ from fastapi import APIRouter
 
 from app.api.routes import (
     auth,
+    case_actions,
     coordinator,
     dive_sessions,
     health,
     reference,
     reports,
 )
-
 
 api_router = APIRouter()
 
@@ -21,9 +21,9 @@ api_router.include_router(
 
 
 api_router.include_router(
-    coordinator.router,
+    case_actions.router,
     prefix="/coordinator",
-    tags=["Coordinator"],
+    tags=["Case Actions"],
 )
 
 api_router.include_router(

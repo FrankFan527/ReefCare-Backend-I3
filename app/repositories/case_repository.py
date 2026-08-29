@@ -161,6 +161,7 @@ async def change_status(
     status_code: str,
     actor_user_id: int,
     note: str | None = None,
+    event_type: str = "status_change",
 ):
     """
     Request a normal workflow transition through the
@@ -168,6 +169,11 @@ async def change_status(
 
     PostgreSQL remains authoritative for transition validity
     and case_event creation.
+
+    event_type defaults to "status_change" so existing callers are
+    unaffected. The information-request endpoint passes "info_requested"
+    so the move shows in the observer timeline as a request for more
+    information rather than a generic status change.
     """
 
     result = await db.execute(
@@ -177,7 +183,8 @@ async def change_status(
                 :report_reference,
                 :status_code,
                 :actor_user_id,
-                :note
+                :note,
+                :event_type
             )
             """
         ),
@@ -186,7 +193,138 @@ async def change_status(
             "status_code": status_code,
             "actor_user_id": actor_user_id,
             "note": note,
+            "event_type": event_type,
         },
     )
 
     return result.scalar_one()
+
+
+# ---------------------------------------------------------------------------
+# Closure support (US5.5).
+#
+# Ownership for the information-request and decision endpoints is checked in
+# case_workflow_service via get_report_owner above; reefcare_change_status()
+# does not check it. reefcare_close_report() does check ownership itself.
+# ---------------------------------------------------------------------------
+
+
+async def transition_is_permitted(
+    db: AsyncSession,
+    from_status_code: str,
+    to_status_code: str,
+) -> bool:
+    """
+    Whether case_status_transition allows this move.
+
+    An application pre-check only. PostgreSQL rejects an unlisted transition
+    regardless, but asking first lets the route return a 409 naming both
+    states instead of surfacing a raw exception.
+
+    Reading the table rather than hardcoding a list means this stays correct
+    if the permitted transitions change.
+    """
+
+    the_transition_result = await db.execute(
+        text(
+            """
+            SELECT 1
+            FROM case_status_transition AS t
+            JOIN case_status AS f ON f.case_status_id = t.from_status_id
+            JOIN case_status AS s ON s.case_status_id = t.to_status_id
+            WHERE f.code = :from_status_code
+              AND s.code = :to_status_code
+            """
+        ),
+        {
+            "from_status_code": from_status_code,
+            "to_status_code": to_status_code,
+        },
+    )
+
+    return the_transition_result.first() is not None
+
+
+async def get_closure_reason(
+    db: AsyncSession,
+    closure_reason_code: str,
+) -> dict | None:
+    """
+    Return a closure reason's rules, or None if the code is unknown.
+
+    requires_note and iteration_added are read rather than hardcoded, so the
+    reference data stays the single source of truth. Adding a reason later
+    means seeding a row, not editing Python.
+    """
+
+    the_reason_result = await db.execute(
+        text(
+            """
+            SELECT
+                code,
+                internal_label,
+                observer_label,
+                requires_note,
+                iteration_added
+            FROM closure_reason
+            WHERE code = :closure_reason_code
+            """
+        ),
+        {"closure_reason_code": closure_reason_code},
+    )
+
+    the_reason_row = the_reason_result.mappings().first()
+
+    if the_reason_row is None:
+        return None
+
+    return dict(the_reason_row)
+
+
+async def close_report(
+    db: AsyncSession,
+    report_reference: str,
+    coordinator_id: int,
+    closure_reason_code: str,
+    terminal_status_code: str,
+    note: str | None = None,
+    referred_to: str | None = None,
+) -> str:
+    """
+    Close a case through the only sanctioned path.
+
+    reefcare_close_report() writes the case_decision row and the terminal
+    status together, and routes the status move through
+    reefcare_change_status() so the case_event lands in the same transaction.
+    It checks ownership itself, unlike reefcare_change_status().
+
+    IMPORTANT FOR CALLERS: trg_report_closure_reason is DEFERRABLE INITIALLY
+    DEFERRED, so a closure that violates it raises at COMMIT rather than here.
+    The caller must commit inside its own error handling, or a failed close
+    will look like a success.
+    """
+
+    the_closure_result = await db.execute(
+        text(
+            """
+            SELECT reefcare_close_report(
+                :report_reference,
+                :coordinator_id,
+                :closure_reason_code,
+                :terminal_status_code,
+                :note,
+                :referred_to
+            ) AS terminal_status_code
+            """
+        ),
+        {
+            "report_reference": report_reference,
+            "coordinator_id": coordinator_id,
+            "closure_reason_code": closure_reason_code,
+            "terminal_status_code": terminal_status_code,
+            "note": note,
+            "referred_to": referred_to,
+        },
+    )
+
+    return the_closure_result.scalar_one()
