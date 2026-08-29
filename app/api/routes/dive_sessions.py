@@ -2,19 +2,20 @@
 # Dive Session routes (US4.1).
 #
 # Thin HTTP adapters. The service owns validation, labelling and the
-# transaction boundary; this layer only maps domain exceptions onto status
-# codes and reshapes rows into the response contract.
+# transaction boundary. Domain exceptions are not caught here: the global
+# handlers registered in main.py map each ServiceError subclass to its own
+# status_code, so NotFoundError becomes 404 and DatabaseOperationError becomes
+# 500 without the route restating either mapping.
 #
 # Observer-only. CurrentObserver rejects any other role with 403 before the
 # handler runs, and the observer id comes from the verified token rather than
 # from anything the client sends. There is no way to ask for somebody else's
 # sessions.
 # ---------------------------------------------------------------------------
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 
 from app.api.dependencies.authorization import CurrentObserver
 from app.api.dependencies.db import DatabaseSession
-from app.core.exceptions import DatabaseOperationError, NotFoundError
 from app.schemas.dive_session import (
     DiveSessionCreate,
     DiveSessionResponse,
@@ -91,27 +92,14 @@ async def create_dive_session_endpoint(
     # the owner comes from the verified token, never from the request body
     the_observer_id = current_user["user_id"]
 
-    try:
-        the_created_row = await create_my_dive_session(
-            db=db,
-            observer_id=the_observer_id,
-            named_dive_site_id=the_session_input.named_dive_site_id,
-            dive_date=the_session_input.dive_date,
-            label=the_session_input.label,
-            approximate_start_time=the_session_input.approximate_start_time,
-            approximate_end_time=the_session_input.approximate_end_time,
-        )
-
-    except NotFoundError as the_error:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(the_error),
-        )
-
-    except DatabaseOperationError as the_error:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(the_error),
-        )
+    the_created_row = await create_my_dive_session(
+        db=db,
+        observer_id=the_observer_id,
+        named_dive_site_id=the_session_input.named_dive_site_id,
+        dive_date=the_session_input.dive_date,
+        label=the_session_input.label,
+        approximate_start_time=the_session_input.approximate_start_time,
+        approximate_end_time=the_session_input.approximate_end_time,
+    )
 
     return build_dive_session_response(the_created_row)

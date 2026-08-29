@@ -8,11 +8,13 @@
 # Field names follow the API contract in the backend doc, not the raw column
 # names. The repository aliases between them.
 # ---------------------------------------------------------------------------
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from pydantic import Field, model_validator
 
 from app.schemas.common import APIModel
+MALAYSIA_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 
 class DiveSiteSummary(APIModel):
     """
@@ -72,18 +74,17 @@ class DiveSessionCreate(APIModel):
     @model_validator(mode="after")
     def check_dive_date_is_not_in_the_future(self):
         """
-        A dive cannot have happened tomorrow.
+        A dive cannot have happened after today in Malaysia.
 
-        One day of tolerance is allowed on purpose. Malaysia is UTC+8, so a
-        dive logged at 1am local time is still the previous day in UTC, and a
-        strict comparison would reject a perfectly valid entry.
+        Compared against the local date rather than UTC. An earlier version
+        allowed a day of tolerance to avoid rejecting early-morning dives,
+        which had the side effect of accepting tomorrow's date entirely.
+        Using the actual local date removes both problems.
         """
 
-        the_latest_allowed_date = (
-            datetime.now(timezone.utc) + timedelta(days=1)
-        ).date()
+        the_today_in_malaysia = datetime.now(MALAYSIA_TIMEZONE).date()
 
-        if self.dive_date > the_latest_allowed_date:
+        if self.dive_date > the_today_in_malaysia:
             raise ValueError("dive_date cannot be in the future")
 
         return self

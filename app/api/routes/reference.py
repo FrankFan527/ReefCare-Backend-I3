@@ -10,8 +10,7 @@ from fastapi import APIRouter
 from app.api.dependencies.auth import CurrentUserClaims
 from app.api.dependencies.db import DatabaseSession
 from app.schemas.reference import DiveSiteResponse
-from app.repositories.reference_repository import list_active_dive_sites
-
+from app.services.reference_service import get_dive_sites as get_dive_sites_from_service
 
 router = APIRouter()
 
@@ -26,8 +25,7 @@ async def get_dive_sites(
 ):
     """Return the named dive sites available for the location step."""
 
-    the_dive_site_rows = await list_active_dive_sites(db=db)
-
+    the_dive_site_rows = await get_dive_sites_from_service(db=db)
     return [
         DiveSiteResponse(**dict(the_single_row))
         for the_single_row in the_dive_site_rows
