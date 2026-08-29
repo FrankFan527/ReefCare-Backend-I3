@@ -10,6 +10,7 @@ from app.api.routes import (
     reports,
 )
 
+
 api_router = APIRouter()
 
 
@@ -19,6 +20,11 @@ api_router.include_router(
     tags=["Authentication"],
 )
 
+api_router.include_router(
+    coordinator.router,
+    prefix="/coordinator",
+    tags=["Coordinator"],
+)
 
 api_router.include_router(
     case_actions.router,
@@ -39,20 +45,12 @@ api_router.include_router(
 )
 
 api_router.include_router(
-    health.router,
-    tags=["Health"],
-)
-
-
-api_router.include_router(
-    reference.router,
-    prefix="/reference",
-    tags=["Reference"],
-)
-
-
-api_router.include_router(
     reports.router,
     prefix="/reports",
     tags=["Reports"],
+)
+
+api_router.include_router(
+    health.router,
+    tags=["Health"],
 )

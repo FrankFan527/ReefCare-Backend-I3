@@ -40,6 +40,10 @@ def create_access_token(
         settings.access_token_expire_minutes
     )
 
+    expires_seconds = (
+        expires_minutes * 60
+    )
+
     now = datetime.now(
         timezone.utc
     )
@@ -62,7 +66,7 @@ def create_access_token(
         algorithm=settings.jwt_algorithm,
     )
 
-    return token, expires_minutes
+    return token, expires_seconds
 
 
 def decode_access_token(
