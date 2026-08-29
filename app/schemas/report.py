@@ -2,6 +2,9 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.enums import CaseStatus
+from app.schemas.common import APIModel
+
 class MapPinInput(BaseModel):
     latitude: float = Field(
         ge=-90,
@@ -94,3 +97,72 @@ class ReportSubmittedResponse(BaseModel):
     submitted_at: datetime
 
     general_location: str
+
+
+class ObserverReportSummary(APIModel):
+    report_reference: str
+    threat_category: str
+    general_location: str
+
+    status: CaseStatus
+    status_label: str
+
+    outcome: str | None = None
+    submitted_at: datetime
+
+
+class ObserverReportListResponse(APIModel):
+    items: list[ObserverReportSummary]
+
+    page: int
+    page_size: int
+    total: int
+
+
+class ObserverLocationResponse(APIModel):
+    latitude: float | None = None
+    longitude: float | None = None
+
+    uncertainty_metres: int | None = None
+    confidence_label: str | None = None
+    source_label: str | None = None
+
+    relocation_notes: str | None = None
+
+
+class ObserverClosureSummary(APIModel):
+    status: CaseStatus
+    closure_label: str
+    public_note: str | None = None
+
+
+class ObserverReportDetailResponse(APIModel):
+    report_reference: str
+    threat_category: str
+
+    description: str
+    observed_at: datetime
+    estimated_depth_metres: float | None = None
+
+    general_location: str
+    dive_site: str | None = None
+    precise_location: ObserverLocationResponse | None = None
+
+    status: CaseStatus
+    status_label: str
+    outcome: str | None = None
+
+    information_request_reason: str | None = None
+    closure: ObserverClosureSummary | None = None
+
+    submitted_at: datetime
+
+
+class ObserverTimelineEvent(APIModel):
+    status_label: str
+    occurred_at: datetime
+
+
+class ObserverTimelineResponse(APIModel):
+    report_reference: str
+    timeline: list[ObserverTimelineEvent]

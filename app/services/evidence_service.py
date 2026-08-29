@@ -22,6 +22,9 @@ class EvidenceValidationError(ValueError):
 
 
 class EvidenceTooLargeError(EvidenceValidationError):
+    """
+    Raised when an uploaded evidence file exceeds the maximum allowed size.
+    """
     pass
 
 
