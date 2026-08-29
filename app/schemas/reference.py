@@ -5,10 +5,9 @@
 # deliberately omits centre_latitude and centre_longitude, so a selection
 # screen cannot accidentally render a precise-looking point.
 # ---------------------------------------------------------------------------
-from pydantic import BaseModel
+from app.schemas.common import APIModel
 
-
-class DiveSiteResponse(BaseModel):
+class DiveSiteResponse(APIModel):
     """A named dive site as offered to an observer choosing a location."""
 
     dive_site_id: int

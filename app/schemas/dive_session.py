@@ -10,10 +10,11 @@
 # ---------------------------------------------------------------------------
 from datetime import date, datetime, timedelta, timezone
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
+from app.schemas.common import APIModel
 
-class DiveSiteSummary(BaseModel):
+class DiveSiteSummary(APIModel):
     """
     The site a session took place at, as shown back to the observer.
 
@@ -27,7 +28,7 @@ class DiveSiteSummary(BaseModel):
     public_area_label: str
 
 
-class DiveSessionResponse(BaseModel):
+class DiveSessionResponse(APIModel):
     """
     One of the signed-in observer's dive sessions.
 
@@ -50,7 +51,7 @@ class DiveSessionResponse(BaseModel):
     approximate_end_time: datetime | None = None
 
 
-class DiveSessionCreate(BaseModel):
+class DiveSessionCreate(APIModel):
     """
     What an observer supplies to create a dive session.
 
