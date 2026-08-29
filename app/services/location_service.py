@@ -18,17 +18,33 @@ from decimal import Decimal
 LOCATION_SOURCE_NAMED_DIVE_SITE: str = "named_dive_site"
 LOCATION_SOURCE_MANUAL_MAP_PIN: str = "manual_map_pin"
 
-# the five options from US4.1 AC4
-VALID_LOCATION_CONFIDENCE_CODES: set[str] = {
+# the confidence recorded when a report has no pin of its own
+DIVE_SITE_ONLY_CONFIDENCE: str = "dive_site_only"
+
+# the confidence assumed when a pin was dropped but no accuracy was stated
+UNSURE_CONFIDENCE: str = "unsure"
+
+# Every code except dive_site_only describes a radius around a point:
+# exact is 25 m, within_100m is 100 m, within_1km is 1 km, unsure is 2 km.
+# Without coordinates there is no point for that radius to surround, so these
+# are only meaningful alongside a map pin.
+CONFIDENCE_CODES_REQUIRING_A_PIN: set[str] = {
     "exact",
     "within_100m",
     "within_1km",
-    "dive_site_only",
-    "unsure",
+    UNSURE_CONFIDENCE,
 }
 
-# the confidence used when a report has no pin of its own
-DIVE_SITE_ONLY_CONFIDENCE: str = "dive_site_only"
+# dive_site_only carries no uncertainty of its own; it resolves to whichever
+# default_uncertainty_metres the chosen site has. It is the only honest answer
+# when the observer did not drop a pin, and it contradicts one that they did.
+CONFIDENCE_CODES_WITHOUT_A_PIN: set[str] = {
+    DIVE_SITE_ONLY_CONFIDENCE,
+}
+
+VALID_LOCATION_CONFIDENCE_CODES: set[str] = (
+    CONFIDENCE_CODES_REQUIRING_A_PIN | CONFIDENCE_CODES_WITHOUT_A_PIN
+)
 
 
 class LocationValidationError(ValueError):
@@ -66,31 +82,54 @@ def validate_coordinates(
         )
 
 
-def derive_location_confidence(
+def validate_location_confidence(
     submitted_confidence_code: str | None,
     has_map_pin: bool,
 ) -> str:
     """
-    Decide which confidence code to store.
+    Validate the observer's confidence against how they gave the location.
 
-    The observer's own answer wins whenever they gave one, because they were
-    the person in the water. Only when they said nothing does this fall back:
-    a report with no pin is dive_site_only, and a report with a pin but no
-    stated confidence is treated as unsure rather than assumed accurate.
-    Overstating precision is the more damaging error.
+    Replaces the earlier derive_location_confidence(...), which accepted any
+    valid code regardless of whether coordinates were supplied. That allowed
+    "exact" with no pin, producing a site-only location claiming 25 m accuracy
+    with nothing to be accurate about. Overstating precision is the more
+    damaging error here, because a coordinator reading "Exact" would trust a
+    position that was never given.
+
+    The rules:
+    - no pin  -> dive_site_only only
+    - a pin   -> anything except dive_site_only
+
+    When nothing was submitted a compatible default is chosen: dive_site_only
+    without a pin, unsure with one. A pin whose accuracy the observer did not
+    state is treated as unsure rather than assumed accurate.
     """
 
-    if submitted_confidence_code is not None:
-        if submitted_confidence_code not in VALID_LOCATION_CONFIDENCE_CODES:
-            raise LocationValidationError(
-                f"Unknown location confidence code: {submitted_confidence_code}"
-            )
-        return submitted_confidence_code
-
-    if not has_map_pin:
+    if submitted_confidence_code is None:
+        if has_map_pin:
+            return UNSURE_CONFIDENCE
         return DIVE_SITE_ONLY_CONFIDENCE
 
-    return "unsure"
+    if submitted_confidence_code not in VALID_LOCATION_CONFIDENCE_CODES:
+        raise LocationValidationError(
+            "location confidence must be one of: "
+            + ", ".join(sorted(VALID_LOCATION_CONFIDENCE_CODES))
+        )
+
+    if has_map_pin and submitted_confidence_code in CONFIDENCE_CODES_WITHOUT_A_PIN:
+        raise LocationValidationError(
+            f"Confidence {submitted_confidence_code} cannot be used with a map "
+            "pin, because it describes a location given by dive site alone"
+        )
+
+    if not has_map_pin and submitted_confidence_code in CONFIDENCE_CODES_REQUIRING_A_PIN:
+        raise LocationValidationError(
+            f"Confidence {submitted_confidence_code} requires coordinates; "
+            f"without a map pin the only valid confidence is "
+            f"{DIVE_SITE_ONLY_CONFIDENCE}"
+        )
+
+    return submitted_confidence_code
 
 
 def normalise_observation_location(
@@ -122,7 +161,7 @@ def normalise_observation_location(
 
     the_pin_was_supplied = latitude is not None and longitude is not None
 
-    the_confidence_code = derive_location_confidence(
+    the_confidence_code = validate_location_confidence(
         submitted_confidence_code=submitted_confidence_code,
         has_map_pin=the_pin_was_supplied,
     )

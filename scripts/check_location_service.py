@@ -2,18 +2,30 @@
 # Direct checks on location_service. No database, no server, no token: these
 # are pure functions, so they can be exercised on their own.
 #
-# Each case below is one of the rules reefcare_submit_report enforces, so if
-# these pass, the values handed to that function will not be rejected.
+# Cases 8 and 9 cover the confidence/source incompatibility raised in review:
+# before the fix, "exact" with no pin produced named_dive_site + exact + no
+# coordinates, which claims 25 m accuracy from a site name alone.
 # ---------------------------------------------------------------------------
 from app.services.location_service import (
     LocationValidationError,
     normalise_observation_location,
     validate_coordinates,
+    validate_location_confidence,
 )
 
 
 def show(the_case_name: str, the_result) -> None:
     print(f"{the_case_name}: {the_result}")
+
+
+def expect_rejection(the_case_name: str, the_callable) -> None:
+    """Run something that should raise, and report whether it did."""
+
+    try:
+        the_callable()
+        print(f"{the_case_name}: NOT REJECTED - this is a bug")
+    except LocationValidationError as the_error:
+        show(f"{the_case_name} rejected", the_error)
 
 
 # 1. site only, no pin -> named_dive_site with no coordinates
@@ -53,25 +65,51 @@ show(
 )
 
 # 5. half a coordinate is not a location
-try:
-    validate_coordinates(latitude=2.7891, longitude=None)
-    print("half coordinate: NOT REJECTED - this is a bug")
-except LocationValidationError as the_error:
-    show("half coordinate rejected", the_error)
+expect_rejection(
+    "half coordinate",
+    lambda: validate_coordinates(latitude=2.7891, longitude=None),
+)
 
 # 6. impossible latitude
-try:
-    validate_coordinates(latitude=999, longitude=104.1567)
-    print("bad latitude: NOT REJECTED - this is a bug")
-except LocationValidationError as the_error:
-    show("bad latitude rejected", the_error)
+expect_rejection(
+    "bad latitude",
+    lambda: validate_coordinates(latitude=999, longitude=104.1567),
+)
 
 # 7. a confidence code that is not one of the five
-try:
-    normalise_observation_location(
+expect_rejection(
+    "bad confidence",
+    lambda: normalise_observation_location(
         named_dive_site_id=3,
         submitted_confidence_code="pretty_sure",
-    )
-    print("bad confidence: NOT REJECTED - this is a bug")
-except LocationValidationError as the_error:
-    show("bad confidence rejected", the_error)
+    ),
+)
+
+# 8. THE REVIEW BUG: exact accuracy claimed with no coordinates
+expect_rejection(
+    "exact without a pin",
+    lambda: normalise_observation_location(
+        named_dive_site_id=3,
+        submitted_confidence_code="exact",
+    ),
+)
+
+# 9. the opposite: dive_site_only claimed alongside a pin
+expect_rejection(
+    "dive_site_only with a pin",
+    lambda: normalise_observation_location(
+        named_dive_site_id=3,
+        latitude=2.7891,
+        longitude=104.1567,
+        submitted_confidence_code="dive_site_only",
+    ),
+)
+
+# 10. within_1km with no pin is equally meaningless
+expect_rejection(
+    "within_1km without a pin",
+    lambda: validate_location_confidence(
+        submitted_confidence_code="within_1km",
+        has_map_pin=False,
+    ),
+)
