@@ -1,8 +1,6 @@
 from fastapi import (
     APIRouter,
-    HTTPException,
     Query,
-    status,
 )
 
 from app.api.dependencies.authorization import (
@@ -10,12 +8,6 @@ from app.api.dependencies.authorization import (
 )
 from app.api.dependencies.db import (
     DatabaseSession,
-)
-from app.core.exceptions import (
-    AuthorizationError,
-    ConflictError,
-    DatabaseOperationError,
-    NotFoundError,
 )
 from app.schemas.case import (
     CaseOwnerResponse,
@@ -54,6 +46,16 @@ async def get_queue(
         le=100,
     ),
 ):
+    """
+    Return the coordinator queue.
+
+    Authentication and coordinator-role checks are enforced
+    through CurrentCoordinator.
+
+    Queue data is retrieved through the service/repository
+    path backed by v_unclaimed_queue.
+    """
+
     return await list_incoming_reports(
         db=db,
         page=page,
@@ -70,59 +72,45 @@ async def claim_report(
     current_coordinator: CurrentCoordinator,
     db: DatabaseSession,
 ):
+    """
+    Claim an unowned report.
+
+    PostgreSQL reefcare_claim_report() remains responsible
+    for atomic ownership and claim-event creation.
+    """
+
     coordinator_id = current_coordinator[
         "user_id"
     ]
 
-    try:
-        owner = await claim_report_service(
-            db=db,
-            report_reference=report_reference,
-            coordinator_id=coordinator_id,
-        )
+    owner = await claim_report_service(
+        db=db,
+        report_reference=report_reference,
+        coordinator_id=coordinator_id,
+    )
 
-        return ClaimedCaseResponse(
-            report_reference=owner[
-                "report_reference"
+    return ClaimedCaseResponse(
+        report_reference=owner[
+            "report_reference"
+        ],
+        owner=CaseOwnerResponse(
+            id=owner[
+                "claimed_by_user_id"
             ],
-            owner=CaseOwnerResponse(
-                id=owner[
-                    "claimed_by_user_id"
-                ],
-                display_name=owner[
-                    "display_name"
-                ],
-            ),
-            status_code=owner[
-                "status_code"
+            display_name=owner[
+                "display_name"
             ],
-            status_label=owner[
-                "status_label"
-            ],
-            claimed_at=owner[
-                "claimed_at"
-            ],
-        )
-
-    except NotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-
-    except ConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-
-    except DatabaseOperationError as exc:
-        raise HTTPException(
-            status_code=(
-                status.HTTP_500_INTERNAL_SERVER_ERROR
-            ),
-            detail="Unable to claim report",
-        ) from exc
+        ),
+        status_code=owner[
+            "status_code"
+        ],
+        status_label=owner[
+            "status_label"
+        ],
+        claimed_at=owner[
+            "claimed_at"
+        ],
+    )
 
 
 @router.get(
@@ -134,25 +122,20 @@ async def get_case(
     current_coordinator: CurrentCoordinator,
     db: DatabaseSession,
 ):
+    """
+    Return the authorised coordinator case-review view.
+
+    The service verifies that the authenticated coordinator
+    currently owns the case before sensitive information is
+    returned.
+    """
+
     coordinator_id = current_coordinator[
         "user_id"
     ]
 
-    try:
-        return await get_coordinator_case(
-            db=db,
-            report_reference=report_reference,
-            coordinator_id=coordinator_id,
-        )
-
-    except NotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-
-    except AuthorizationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
+    return await get_coordinator_case(
+        db=db,
+        report_reference=report_reference,
+        coordinator_id=coordinator_id,
+    )
