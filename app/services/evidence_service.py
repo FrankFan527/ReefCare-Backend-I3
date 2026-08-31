@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from pathlib import Path
+from functools import lru_cache
 from uuid import uuid4
 
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
+from supabase import Client, create_client
 
 from app.core.config import settings
 
@@ -52,25 +53,20 @@ class StoredEvidence:
     content_type: str
 
 
-def _get_storage_root() -> Path:
+@lru_cache
+def _get_supabase_client() -> Client:
     """
-    Return the root directory used for development evidence storage.
+    Return the server-side Supabase client used for
+    private evidence storage.
 
-    For the current repository this falls back to ./private_evidence
-    when evidence_storage_dir has not yet been added to Settings.
-
-    In production this function can later be replaced by an
-    R2/S3/Supabase storage adapter without changing the report
-    submission contract.
+    The configured secret key must never be exposed
+    to frontend code.
     """
 
-    configured_path = getattr(
-        settings,
-        "evidence_storage_dir",
-        "./private_evidence",
+    return create_client(
+        settings.supabase_url,
+        settings.supabase_secret_key.get_secret_value(),
     )
-
-    return Path(configured_path)
 
 
 def _validate_file_signature(
@@ -167,19 +163,11 @@ async def store_private_evidence(
     content: bytes,
 ) -> StoredEvidence:
     """
-    Store a validated evidence file in private development storage.
+    Store validated evidence in the private
+    Supabase Storage bucket.
 
-    The returned file_reference is a storage key such as:
-
-        evidence/a84d...9f.jpg
-
-    It is deliberately NOT a public URL.
-
-    Do not mount the private_evidence directory using FastAPI
-    StaticFiles.
-
-    Production object storage can later replace the implementation
-    inside this function without changing callers.
+    The returned file_reference is an opaque
+    storage object key, not a public URL.
     """
 
     content_type = (
@@ -199,25 +187,30 @@ async def store_private_evidence(
         f"evidence/{uuid4().hex}{extension}"
     )
 
-    storage_root = _get_storage_root()
+    def upload_object():
+        client = _get_supabase_client()
 
-    destination = (
-        storage_root / object_key
-    )
+        return (
+            client.storage
+            .from_(
+                settings.supabase_storage_bucket
+            )
+            .upload(
+                path=object_key,
+                file=content,
+                file_options={
+                    "content-type": content_type,
+                    "upsert": "false",
+                },
+            )
+        )
 
     try:
         await run_in_threadpool(
-            destination.parent.mkdir,
-            parents=True,
-            exist_ok=True,
+            upload_object
         )
 
-        await run_in_threadpool(
-            destination.write_bytes,
-            content,
-        )
-
-    except OSError as exc:
+    except Exception as exc:
         raise EvidenceStorageError(
             "Unable to store private evidence"
         ) from exc
@@ -279,29 +272,34 @@ async def delete_private_evidence(
     file_reference: str,
 ) -> None:
     """
-    Delete one private evidence object.
+    Best-effort deletion of a private Supabase
+    Storage object.
 
-    Used when the PostgreSQL submission fails after files
-    have already been stored.
-
-    Cleanup is best-effort so a cleanup problem does not hide
-    the original submission exception.
+    Used to compensate when database report
+    submission fails after evidence was uploaded.
     """
 
-    storage_root = _get_storage_root()
+    def remove_object():
+        client = _get_supabase_client()
 
-    target = (
-        storage_root / file_reference
-    )
+        return (
+            client.storage
+            .from_(
+                settings.supabase_storage_bucket
+            )
+            .remove(
+                [file_reference]
+            )
+        )
 
     try:
         await run_in_threadpool(
-            target.unlink,
-            missing_ok=True,
+            remove_object
         )
-    except OSError:
+
+    except Exception:
         # Best-effort cleanup.
-        # Once logging.py exists this should be logged.
+        # Log this when application logging is introduced.
         pass
 
 

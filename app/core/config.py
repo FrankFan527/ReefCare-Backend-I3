@@ -1,4 +1,4 @@
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, SecretStr
 from pydantic_settings import (
     BaseSettings,
     SettingsConfigDict,
@@ -14,10 +14,16 @@ class Settings(BaseSettings):
     # Database
     database_url: str
 
-    evidence_storage_dir: str = (
-        "./private_evidence"
+    # evidence_storage_dir: str = (
+    #     "./private_evidence"
+    # )
+
+    supabase_url: str
+    supabase_secret_key: SecretStr
+    supabase_storage_bucket: str = (
+        "reefcare-evidence"
     )
-    
+
     # JWT
     jwt_secret_key: str = Field(
         min_length=32,
