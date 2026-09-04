@@ -1,3 +1,4 @@
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import CaseStatus
@@ -5,6 +6,7 @@ from app.core.exceptions import (
     AuthorizationError,
     DatabaseOperationError,
     NotFoundError,
+    WorkflowError,
 )
 from app.repositories.case_repository import (
     change_status,
@@ -92,19 +94,34 @@ async def set_case_under_review(
     db: AsyncSession,
     report_reference: str,
     coordinator_id: int,
-    note: str | None = None,
 ):
     """
-    Request CLAIMED -> UNDER_REVIEW.
+    Move an owned case from CLAIMED to UNDER_REVIEW.
 
-    PostgreSQL case_status_transition remains authoritative.
+    Ownership is checked before the workflow transition.
+
+    PostgreSQL reefcare_change_status() remains authoritative
+    for the actual status change and audit-event creation.
     """
 
-    await get_owned_case(
+    case = await get_owned_case(
         db=db,
         report_reference=report_reference,
         coordinator_id=coordinator_id,
     )
+
+    current_status = case[
+        "status_code"
+    ]
+
+    if (
+        current_status
+        != CaseStatus.CLAIMED.value
+    ):
+        raise WorkflowError(
+            "A case can only start review "
+            "while its status is claimed"
+        )
 
     try:
         new_status = await change_status(
@@ -114,14 +131,13 @@ async def set_case_under_review(
                 CaseStatus.UNDER_REVIEW.value
             ),
             actor_user_id=coordinator_id,
-            note=note,
         )
 
         await db.commit()
 
         return new_status
 
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         await db.rollback()
 
         raise DatabaseOperationError(

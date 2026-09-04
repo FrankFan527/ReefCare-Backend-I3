@@ -14,12 +14,14 @@ from app.schemas.case import (
     ClaimedCaseResponse,
     CoordinatorCaseResponse,
     CoordinatorQueueResponse,
+    StartReviewResponse,
 )
 from app.services.case_ownership_service import (
     claim_report as claim_report_service,
 )
 from app.services.case_service import (
     get_coordinator_case,
+    set_case_under_review,
 )
 from app.services.queue_service import (
     list_incoming_reports,
@@ -110,6 +112,41 @@ async def claim_report(
         claimed_at=owner[
             "claimed_at"
         ],
+    )
+
+
+@router.post(
+    "/reports/{report_reference}/start-review",
+    response_model=StartReviewResponse,
+)
+async def start_case_review(
+    report_reference: str,
+    current_coordinator: CurrentCoordinator,
+    db: DatabaseSession,
+):
+    """
+    Start reviewing a claimed case.
+
+    Only the coordinator who currently owns the case may
+    perform this action.
+
+    The service moves the report from CLAIMED to
+    UNDER_REVIEW through reefcare_change_status().
+    """
+
+    coordinator_id = current_coordinator[
+        "user_id"
+    ]
+
+    new_status = await set_case_under_review(
+        db=db,
+        report_reference=report_reference,
+        coordinator_id=coordinator_id,
+    )
+
+    return StartReviewResponse(
+        report_reference=report_reference,
+        status_code=new_status,
     )
 
 
