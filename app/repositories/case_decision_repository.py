@@ -109,3 +109,67 @@ async def get_latest_decision(
         return None
 
     return dict(the_decision_row)
+
+async def save_evidence_assessment(
+    db: AsyncSession,
+    report_reference: str,
+    coordinator_id: int,
+    evidence_usable: bool,
+    observation_credible: bool | None = None,
+    decision_note: str | None = None,
+) -> dict | None:
+    """
+    Record a coordinator's answers to the two evidence questions (US5.3).
+
+    Writes the case_decision row that carries evidence_usable and
+    observation_credible. response_type is deliberately left NULL, because an
+    assessment is not yet a response decision: US5.4 records that separately,
+    and reefcare_close_report() writes its own row with the reason attached
+    when a case is actually closed.
+
+    INSERT ... SELECT resolves the report from its reference inside the same
+    statement, so a report withdrawn between a lookup and an insert cannot
+    produce an orphaned assessment. A withdrawn report matches nothing and the
+    function returns None.
+
+    The caller commits.
+    """
+
+    the_assessment_result = await db.execute(
+        text(
+            """
+            INSERT INTO case_decision
+                (report_id, coordinator_id, evidence_usable,
+                 observation_credible, decision_note)
+            SELECT
+                r.report_id,
+                :coordinator_id,
+                :evidence_usable,
+                :observation_credible,
+                :decision_note
+            FROM report AS r
+            WHERE r.report_reference = :report_reference
+              AND r.deleted_at IS NULL
+            RETURNING
+                case_decision_id,
+                evidence_usable,
+                observation_credible,
+                decided_at,
+                coordinator_id
+            """
+        ),
+        {
+            "report_reference": report_reference,
+            "coordinator_id": coordinator_id,
+            "evidence_usable": evidence_usable,
+            "observation_credible": observation_credible,
+            "decision_note": decision_note,
+        },
+    )
+
+    the_assessment_row = the_assessment_result.mappings().first()
+
+    if the_assessment_row is None:
+        return None
+
+    return dict(the_assessment_row)

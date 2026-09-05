@@ -24,6 +24,8 @@ from app.api.dependencies.db import DatabaseSession
 from app.schemas.case import (
     CaseClosureCreate,
     CaseClosureResponse,
+    EvidenceAssessmentCreate,
+    EvidenceAssessmentResponse,
     InformationRequestCreate,
     InformationRequestResponse,
     ResponseTypeDecisionCreate,
@@ -32,6 +34,7 @@ from app.schemas.case import (
 from app.services.case_closure_service import close_case
 from app.services.case_decision_service import record_decision
 from app.services.case_workflow_service import request_more_information
+from app.services.case_assessment_service import record_evidence_assessment
 
 
 router = APIRouter()
@@ -151,4 +154,54 @@ async def close_owned_case(
         status=the_result["status"],
         closure_reason_code=the_result["closure_reason_code"],
         closed_at=datetime.now(timezone.utc),
+    )
+
+@router.post(
+    "/reports/{report_reference}/evidence-assessment",
+    response_model=EvidenceAssessmentResponse,
+)
+async def assess_case_evidence(
+    report_reference: str,
+    the_assessment_input: EvidenceAssessmentCreate,
+    current_user: CurrentCoordinator,
+    db: DatabaseSession,
+):
+    """
+    Record the two evidence questions and move the case accordingly.
+
+    The commit sits inside the try because one of the three outcomes closes the
+    case, and trg_report_closure_reason is DEFERRABLE INITIALLY DEFERRED, so it
+    raises at COMMIT rather than at execute. Committing outside the try would
+    return 200 for a closure that never happened.
+    """
+
+    # the actor comes from the verified token, never from the request
+    the_coordinator_id = current_user["user_id"]
+
+    try:
+        the_result = await record_evidence_assessment(
+            db=db,
+            report_reference=report_reference,
+            coordinator_id=the_coordinator_id,
+            evidence_usable=the_assessment_input.evidence_usable,
+            observation_credible=the_assessment_input.observation_credible,
+            notes=the_assessment_input.notes,
+        )
+
+        await db.commit()
+
+    except DBAPIError as the_error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The evidence assessment could not be recorded in this case's current state",
+        ) from the_error
+
+    return EvidenceAssessmentResponse(
+        report_reference=the_result["report_reference"],
+        evidence_usable=the_result["evidence_usable"],
+        observation_credible=the_result["observation_credible"],
+        status=the_result["status"],
+        assessed_at=the_result["assessed_at"],
+        assessed_by=the_result["assessed_by"],
     )
