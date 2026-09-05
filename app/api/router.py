@@ -5,6 +5,7 @@ from app.api.routes import (
     case_actions,
     coordinator,
     dive_sessions,
+    evidence,
     health,
     reference,
     reports,
@@ -30,6 +31,12 @@ api_router.include_router(
     case_actions.router,
     prefix="/coordinator",
     tags=["Case Actions"],
+)
+
+api_router.include_router(
+    evidence.router,
+    prefix="/coordinator",
+    tags=["Evidence"],
 )
 
 api_router.include_router(

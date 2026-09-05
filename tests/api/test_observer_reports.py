@@ -9,6 +9,10 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.dependencies.auth import (
+    require_authentication,
+)
+
 from app.api.dependencies.authorization import (
     require_observer,
 )
@@ -47,6 +51,14 @@ def override_observer():
     return {
         "user_id": 42,
         "role": "observer",
+    }
+
+
+def override_coordinator():
+    return {
+        "user_id": 12,
+        "role": "case_coordinator",
+        "display_name": "Test Coordinator",
     }
 
 
@@ -105,17 +117,12 @@ def test_my_reports_requires_authentication(
 def test_my_reports_rejects_non_observer_role(
     client,
 ):
-    token = make_token(
-        user_id=12,
-        role="case_coordinator",
-    )
+    app.dependency_overrides[
+        require_authentication
+    ] = override_coordinator
 
     response = client.get(
         "/api/v1/reports/mine",
-        headers={
-            "Authorization":
-                f"Bearer {token}"
-        },
     )
 
     assert response.status_code == 403
