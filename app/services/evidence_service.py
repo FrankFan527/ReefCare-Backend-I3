@@ -8,6 +8,18 @@ from supabase import Client, create_client
 
 from app.core.config import settings
 
+from app.core.exceptions import (
+    NotFoundError,
+)
+from app.repositories.evidence_repository import (
+    get_case_evidence,
+)
+from app.services.case_service import (
+    get_owned_case,
+)
+
+import mimetypes
+
 ALLOWED_PHOTO_TYPES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -102,6 +114,123 @@ def _validate_file_signature(
             raise EvidenceValidationError(
                 "Uploaded file is not a valid WebP image"
             )
+
+
+@dataclass(slots=True)
+class EvidenceFile:
+    """
+    Private evidence bytes after ownership and
+    report/evidence checks have succeeded.
+    """
+
+    content: bytes
+    content_type: str
+
+
+def _content_type_for_reference(
+    file_reference: str,
+) -> str:
+    """
+    Infer the response MIME type from the
+    private object key.
+    """
+
+    guessed_type, _ = (
+        mimetypes.guess_type(
+            file_reference
+        )
+    )
+
+    if guessed_type in ALLOWED_PHOTO_TYPES:
+        return guessed_type
+
+    return "application/octet-stream"
+
+
+async def get_case_evidence_file(
+    *,
+    db,
+    report_reference: str,
+    evidence_id: int,
+    coordinator_id: int,
+) -> EvidenceFile:
+    """
+    Return private evidence only to the
+    coordinator who currently owns the case.
+
+    Security sequence:
+
+    1. Verify case ownership.
+    2. Verify evidence belongs to the report.
+    3. Download the private object server-side.
+    4. Return bytes without exposing the object key.
+    """
+
+    # First security boundary:
+    # coordinator must currently own this report.
+    await get_owned_case(
+        db=db,
+        report_reference=(
+            report_reference
+        ),
+        coordinator_id=(
+            coordinator_id
+        ),
+    )
+
+    # Second security boundary:
+    # evidence must actually belong to this report.
+    evidence = await get_case_evidence(
+        db=db,
+        report_reference=(
+            report_reference
+        ),
+        evidence_id=evidence_id,
+    )
+
+    if evidence is None:
+        # Do not reveal whether the evidence
+        # belongs to a different case.
+        raise NotFoundError(
+            "Evidence not found"
+        )
+
+    file_reference = (
+        evidence["file_reference"]
+    )
+
+    def download_object():
+        client = _get_supabase_client()
+
+        return (
+            client.storage
+            .from_(
+                settings
+                .supabase_storage_bucket
+            )
+            .download(
+                file_reference
+            )
+        )
+
+    try:
+        content = await run_in_threadpool(
+            download_object
+        )
+
+    except Exception as exc:
+        raise EvidenceStorageError(
+            "Unable to load private evidence"
+        ) from exc
+
+    return EvidenceFile(
+        content=content,
+        content_type=(
+            _content_type_for_reference(
+                file_reference
+            )
+        ),
+    )
 
 
 async def validate_photo(

@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+date: Sat, 05 Sep 2026 13:33:44 GMT
+server: uvicorn
+cache-control: private, no-store
+x-content-type-options: nosniff
+content-length: 884849
+content-type: image/jpeg
+
