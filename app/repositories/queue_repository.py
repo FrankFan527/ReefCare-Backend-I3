@@ -8,30 +8,102 @@ async def list_incoming_reports(
     page_size: int,
 ):
     """
-    Read the coordinator queue through v_unclaimed_queue.
+    Return the active coordinator queue.
 
-    The database view is the authoritative queue-safe source
-    and must not expose precise coordinates.
+    Iteration 1 US5.1 requires submitted reports to remain
+    visible with their current status.
+
+    The queue includes active reports from initial receipt
+    through coordinator review/routing, while terminal
+    closed reports are excluded.
+
+    Only queue-safe fields are selected. Precise
+    coordinates and private evidence are never returned
+    through this query.
     """
 
     offset = (page - 1) * page_size
+
+    active_status_codes = (
+        "received",
+        "claimed",
+        "under_review",
+        "needs_more_info",
+        "evidence_accepted",
+        "monitoring",
+        "referred",
+    )
 
     result = await db.execute(
         text(
             """
             SELECT
-                report_reference,
-                threat,
-                area,
-                status,
-                submitted_at,
-                hours_in_queue
+                r.report_reference,
 
-            FROM v_unclaimed_queue
+                tc.label AS threat,
+
+                ds.public_area_label AS area,
+
+                cs.code AS status_code,
+                cs.internal_label AS status_label,
+
+                r.submitted_at,
+
+                CAST(
+                    FLOOR(
+                        EXTRACT(
+                            EPOCH FROM (
+                                CURRENT_TIMESTAMP
+                                - r.submitted_at
+                            )
+                        ) / 3600
+                    )
+                    AS INTEGER
+                ) AS hours_in_queue,
+
+                r.claimed_by_user_id,
+                r.claimed_at,
+
+                u.display_name AS owner_display_name
+
+            FROM report AS r
+
+            JOIN threat_category AS tc
+                ON tc.threat_category_id =
+                   r.threat_category_id
+
+            JOIN case_status AS cs
+                ON cs.case_status_id =
+                   r.current_status_id
+
+            LEFT JOIN dive_session AS dsn
+                ON dsn.dive_session_id =
+                   r.dive_session_id
+
+            LEFT JOIN dive_site AS ds
+                ON ds.dive_site_id =
+                   dsn.dive_site_id
+
+            LEFT JOIN app_user AS u
+                ON u.user_id =
+                   r.claimed_by_user_id
+
+            WHERE
+                r.deleted_at IS NULL
+
+                AND cs.code IN (
+                    'received',
+                    'claimed',
+                    'under_review',
+                    'needs_more_info',
+                    'evidence_accepted',
+                    'monitoring',
+                    'referred'
+                )
 
             ORDER BY
-                submitted_at ASC,
-                report_id ASC
+                r.submitted_at ASC,
+                r.report_id ASC
 
             LIMIT :limit
             OFFSET :offset
@@ -48,8 +120,26 @@ async def list_incoming_reports(
     count_result = await db.execute(
         text(
             """
-            SELECT count(*)
-            FROM v_unclaimed_queue
+            SELECT COUNT(*)
+
+            FROM report AS r
+
+            JOIN case_status AS cs
+                ON cs.case_status_id =
+                   r.current_status_id
+
+            WHERE
+                r.deleted_at IS NULL
+
+                AND cs.code IN (
+                    'received',
+                    'claimed',
+                    'under_review',
+                    'needs_more_info',
+                    'evidence_accepted',
+                    'monitoring',
+                    'referred'
+                )
             """
         )
     )

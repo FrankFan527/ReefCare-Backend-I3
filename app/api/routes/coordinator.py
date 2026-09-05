@@ -49,13 +49,16 @@ async def get_queue(
     ),
 ):
     """
-    Return the coordinator queue.
+    Return the active coordinator queue.
 
     Authentication and coordinator-role checks are enforced
     through CurrentCoordinator.
 
-    Queue data is retrieved through the service/repository
-    path backed by v_unclaimed_queue.
+    The queue contains active submitted reports and exposes
+    only queue-safe general information, current status and
+    ownership details.
+
+    Precise coordinates and private evidence are excluded.
     """
 
     return await list_incoming_reports(

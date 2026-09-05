@@ -16,15 +16,28 @@ class CaseOwnerResponse(APIModel):
 
 
 class CoordinatorQueueItem(APIModel):
+    """
+    Queue-safe representation of one active submitted
+    report.
+
+    The queue contains only generalised location and
+    ownership information. It never exposes precise
+    coordinates or private evidence.
+    """
+
     report_reference: str
 
     threat: str
     area: str | None = None
 
+    status_code: CaseStatus
     status_label: str
 
     submitted_at: datetime
     hours_in_queue: int
+
+    owner: CaseOwnerResponse | None = None
+    claimed_at: datetime | None = None
 
 
 class CoordinatorQueueResponse(APIModel):
@@ -101,7 +114,8 @@ class CoordinatorCaseResponse(APIModel):
 
 class InformationRequestCreate(APIModel):
     """
-    The coordinator's reason for asking the observer for more information.
+    The coordinator's reason for asking the observer for
+    more information.
 
     Iteration 1 has no separate information_request table.
     The reason is written into case_event.note by
@@ -133,7 +147,8 @@ class InformationRequestCreate(APIModel):
 
 class InformationRequestResponse(APIModel):
     """
-    Confirmation that the case moved to needs_more_info.
+    Confirmation that the case moved to
+    needs_more_info.
     """
 
     report_reference: str
