@@ -88,6 +88,20 @@ class EvidenceSummary(APIModel):
     uploaded_at: datetime
 
 
+class LatestDecisionResponse(APIModel):
+    """
+    Latest persisted US5.4 response decision.
+
+    This deliberately excludes evidence-assessment-only
+    and terminal closure records.
+    """
+
+    response_type: str
+    notes: str | None = None
+    referred_to: str | None = None
+    decided_at: datetime
+
+
 class CoordinatorCaseResponse(APIModel):
     report_reference: str
 
@@ -96,11 +110,17 @@ class CoordinatorCaseResponse(APIModel):
     threat: str
     description: str
 
+    # Actual observation time.
+    # Nullable for legitimate legacy records.
+    observed_at: datetime | None
+
     estimated_depth_metres: float | None = None
 
     area: str | None = None
 
-    precise_location: PreciseLocationResponse | None = None
+    precise_location: (
+        PreciseLocationResponse | None
+    ) = None
 
     status_code: CaseStatus
     status_label: str
@@ -110,6 +130,11 @@ class CoordinatorCaseResponse(APIModel):
     owner: CaseOwnerResponse
 
     evidence: list[EvidenceSummary]
+
+    # Null until a US5.4 response decision has been saved.
+    latest_decision: (
+        LatestDecisionResponse | None
+    ) = None
 
 
 class InformationRequestCreate(APIModel):
@@ -298,51 +323,49 @@ class CaseClosureResponse(APIModel):
 
 class EvidenceAssessmentCreate(APIModel):
     """
-    A coordinator's answers to the two evidence questions (US5.3).
-
-    These map onto case_decision.evidence_usable and observation_credible,
-    which are Q1 and Q2 of the proposal decision tree. The outcome is derived
-    from the two answers rather than being chosen by the client, because which
-    status is reachable depends on the case's current state.
+    A coordinator's answers to the two evidence
+    questions (US5.3).
     """
 
     evidence_usable: bool
     observation_credible: bool | None = None
 
-    notes: str | None = Field(default=None, max_length=1000)
+    notes: str | None = Field(
+        default=None,
+        max_length=1000,
+    )
 
-    # Accepted so the frontend contract does not break, but not stored in
-    # Iteration 1. Merging duplicate reports needs the incident table, which
-    # is Iteration 2. Recorded here so nobody assumes these persist.
     related_report_state: str | None = None
     related_report_reference: str | None = None
 
     @model_validator(mode="after")
-    def credibility_is_required_when_evidence_is_usable(self):
-        """
-        Q2 only makes sense once Q1 is yes.
-
-        If the evidence cannot be used then there is nothing to judge the
-        credibility of, and the case goes back to the observer for more.
-        """
-
-        if self.evidence_usable and self.observation_credible is None:
+    def credibility_is_required_when_evidence_is_usable(
+        self,
+    ):
+        if (
+            self.evidence_usable
+            and self.observation_credible
+            is None
+        ):
             raise ValueError(
-                "observation_credible is required when evidence_usable is true"
+                "observation_credible is required "
+                "when evidence_usable is true"
             )
 
         return self
 
 
 class EvidenceAssessmentResponse(APIModel):
-    """Confirmation that an assessment was recorded, and where it moved the case."""
+    """
+    Confirmation that an assessment was recorded,
+    and where it moved the case.
+    """
 
     report_reference: str
 
     evidence_usable: bool
     observation_credible: bool | None = None
 
-    # the canonical database status code the case landed in
     status: str
 
     assessed_at: datetime

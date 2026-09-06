@@ -1,18 +1,13 @@
 # ---------------------------------------------------------------------------
-# Case decision persistence (US5.4).
+# Case decision persistence (US5.3 / US5.4).
 #
 # Repositories own SQL; services own workflow.
 #
-# NOTE: unlike closure, there is no sanctioned database function for recording
-# a non-terminal decision. reefcare_close_report() writes a case_decision row
-# as part of closing, but a decision recorded on its own is a plain INSERT.
-# That means no database-level ownership check applies here either, and the
-# service layer is again the only thing enforcing it.
-#
-# trg_case_decision_validate still fires on this INSERT and will reject a
-# refer_or_share decision with no referred_to, and any Iteration 2 closure
-# reason. Those remain authoritative regardless of what Python checked first.
+# Evidence assessment, response decision and terminal closure may all create
+# rows in case_decision. Therefore a "latest response decision" must be
+# distinguished from assessment-only and closure rows.
 # ---------------------------------------------------------------------------
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,15 +21,11 @@ async def save_case_decision(
     referred_to: str | None = None,
 ) -> dict:
     """
-    Insert one non-terminal case_decision row.
+    Insert one non-terminal US5.4 response decision.
 
-    closure_reason_id is deliberately left NULL. A decision recorded here is
-    not a closure, and reefcare_close_report() writes its own case_decision
-    row with the reason attached when the case is actually closed.
-
-    The report is resolved from its reference inside the statement rather than
-    in a separate query, so there is no window in which the report could be
-    withdrawn between lookup and insert.
+    closure_reason_id remains NULL because this endpoint
+    records the response decision only. Terminal closure is
+    handled separately through reefcare_close_report().
 
     The caller commits.
     """
@@ -43,30 +34,54 @@ async def save_case_decision(
         text(
             """
             INSERT INTO case_decision
-                (report_id, coordinator_id, response_type,
-                 decision_note, referred_to)
+                (
+                    report_id,
+                    coordinator_id,
+                    response_type,
+                    decision_note,
+                    referred_to
+                )
             SELECT
                 r.report_id,
                 :coordinator_id,
                 :response_type,
                 :decision_note,
                 :referred_to
+
             FROM report AS r
-            WHERE r.report_reference = :report_reference
-              AND r.deleted_at IS NULL
-            RETURNING case_decision_id, response_type, decided_at, coordinator_id
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.deleted_at IS NULL
+
+            RETURNING
+                case_decision_id,
+                response_type,
+                decided_at,
+                coordinator_id
             """
         ),
         {
-            "report_reference": report_reference,
-            "coordinator_id": coordinator_id,
-            "response_type": response_type,
-            "decision_note": decision_note,
-            "referred_to": referred_to,
+            "report_reference":
+                report_reference,
+            "coordinator_id":
+                coordinator_id,
+            "response_type":
+                response_type,
+            "decision_note":
+                decision_note,
+            "referred_to":
+                referred_to,
         },
     )
 
-    return dict(the_decision_result.mappings().one())
+    return dict(
+        the_decision_result
+        .mappings()
+        .one()
+    )
 
 
 async def get_latest_decision(
@@ -74,11 +89,18 @@ async def get_latest_decision(
     report_reference: str,
 ) -> dict | None:
     """
-    Return the most recent decision on a case, or None if there is none.
+    Return the newest saved US5.4 response decision.
 
-    The closure endpoint needs this: US5.5 requires a decision to exist before
-    a case can be closed, and that ordering is not enforced anywhere in the
-    database.
+    case_decision also stores US5.3 evidence assessments
+    and US5.5 closure records. Those rows must not replace
+    the response decision returned to the coordinator UI.
+
+    A US5.4 response decision is identified by:
+    - response_type IS NOT NULL
+    - closure_reason_id IS NULL
+
+    Returns None when the report has no saved response
+    decision.
     """
 
     the_decision_result = await db.execute(
@@ -91,24 +113,49 @@ async def get_latest_decision(
                 cd.decision_note,
                 cd.decided_at,
                 cd.coordinator_id
+
             FROM case_decision AS cd
+
             JOIN report AS r
-                ON r.report_id = cd.report_id
-            WHERE r.report_reference = :report_reference
-              AND r.deleted_at IS NULL
-            ORDER BY cd.decided_at DESC, cd.case_decision_id DESC
+                ON r.report_id =
+                   cd.report_id
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.deleted_at IS NULL
+
+                AND cd.response_type
+                    IS NOT NULL
+
+                AND cd.closure_reason_id
+                    IS NULL
+
+            ORDER BY
+                cd.decided_at DESC,
+                cd.case_decision_id DESC
+
             LIMIT 1
             """
         ),
-        {"report_reference": report_reference},
+        {
+            "report_reference":
+                report_reference
+        },
     )
 
-    the_decision_row = the_decision_result.mappings().first()
+    the_decision_row = (
+        the_decision_result
+        .mappings()
+        .first()
+    )
 
     if the_decision_row is None:
         return None
 
     return dict(the_decision_row)
+
 
 async def save_evidence_assessment(
     db: AsyncSession,
@@ -119,18 +166,11 @@ async def save_evidence_assessment(
     decision_note: str | None = None,
 ) -> dict | None:
     """
-    Record a coordinator's answers to the two evidence questions (US5.3).
+    Record a coordinator's answers to the two evidence
+    questions (US5.3).
 
-    Writes the case_decision row that carries evidence_usable and
-    observation_credible. response_type is deliberately left NULL, because an
-    assessment is not yet a response decision: US5.4 records that separately,
-    and reefcare_close_report() writes its own row with the reason attached
-    when a case is actually closed.
-
-    INSERT ... SELECT resolves the report from its reference inside the same
-    statement, so a report withdrawn between a lookup and an insert cannot
-    produce an orphaned assessment. A withdrawn report matches nothing and the
-    function returns None.
+    response_type remains NULL because assessment is not a
+    US5.4 response decision.
 
     The caller commits.
     """
@@ -139,17 +179,28 @@ async def save_evidence_assessment(
         text(
             """
             INSERT INTO case_decision
-                (report_id, coordinator_id, evidence_usable,
-                 observation_credible, decision_note)
+                (
+                    report_id,
+                    coordinator_id,
+                    evidence_usable,
+                    observation_credible,
+                    decision_note
+                )
             SELECT
                 r.report_id,
                 :coordinator_id,
                 :evidence_usable,
                 :observation_credible,
                 :decision_note
+
             FROM report AS r
-            WHERE r.report_reference = :report_reference
-              AND r.deleted_at IS NULL
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.deleted_at IS NULL
+
             RETURNING
                 case_decision_id,
                 evidence_usable,
@@ -159,15 +210,24 @@ async def save_evidence_assessment(
             """
         ),
         {
-            "report_reference": report_reference,
-            "coordinator_id": coordinator_id,
-            "evidence_usable": evidence_usable,
-            "observation_credible": observation_credible,
-            "decision_note": decision_note,
+            "report_reference":
+                report_reference,
+            "coordinator_id":
+                coordinator_id,
+            "evidence_usable":
+                evidence_usable,
+            "observation_credible":
+                observation_credible,
+            "decision_note":
+                decision_note,
         },
     )
 
-    the_assessment_row = the_assessment_result.mappings().first()
+    the_assessment_row = (
+        the_assessment_result
+        .mappings()
+        .first()
+    )
 
     if the_assessment_row is None:
         return None

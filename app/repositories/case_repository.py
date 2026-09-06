@@ -90,6 +90,9 @@ async def get_case(
     Return the internal case aggregate required by the
     coordinator service.
 
+    observed_at is the actual observation timestamp and
+    must remain distinct from submitted_at.
+
     Ownership must be checked by the service before the
     result is exposed externally.
     """
@@ -104,6 +107,7 @@ async def get_case(
                 tc.label AS threat,
 
                 r.description,
+                r.observed_at,
                 r.estimated_depth_metres,
 
                 ds.public_area_label AS area,
@@ -230,8 +234,10 @@ async def transition_is_permitted(
             """
             SELECT 1
             FROM case_status_transition AS t
-            JOIN case_status AS f ON f.case_status_id = t.from_status_id
-            JOIN case_status AS s ON s.case_status_id = t.to_status_id
+            JOIN case_status AS f
+                ON f.case_status_id = t.from_status_id
+            JOIN case_status AS s
+                ON s.case_status_id = t.to_status_id
             WHERE f.code = :from_status_code
               AND s.code = :to_status_code
             """
@@ -242,7 +248,10 @@ async def transition_is_permitted(
         },
     )
 
-    return the_transition_result.first() is not None
+    return (
+        the_transition_result.first()
+        is not None
+    )
 
 
 async def get_closure_reason(
@@ -253,8 +262,7 @@ async def get_closure_reason(
     Return a closure reason's rules, or None if the code is unknown.
 
     requires_note and iteration_added are read rather than hardcoded, so the
-    reference data stays the single source of truth. Adding a reason later
-    means seeding a row, not editing Python.
+    reference data stays the single source of truth.
     """
 
     the_reason_result = await db.execute(
@@ -267,13 +275,21 @@ async def get_closure_reason(
                 requires_note,
                 iteration_added
             FROM closure_reason
-            WHERE code = :closure_reason_code
+            WHERE code =
+                :closure_reason_code
             """
         ),
-        {"closure_reason_code": closure_reason_code},
+        {
+            "closure_reason_code":
+                closure_reason_code
+        },
     )
 
-    the_reason_row = the_reason_result.mappings().first()
+    the_reason_row = (
+        the_reason_result
+        .mappings()
+        .first()
+    )
 
     if the_reason_row is None:
         return None
@@ -293,15 +309,9 @@ async def close_report(
     """
     Close a case through the only sanctioned path.
 
-    reefcare_close_report() writes the case_decision row and the terminal
-    status together, and routes the status move through
-    reefcare_change_status() so the case_event lands in the same transaction.
-    It checks ownership itself, unlike reefcare_change_status().
-
-    IMPORTANT FOR CALLERS: trg_report_closure_reason is DEFERRABLE INITIALLY
-    DEFERRED, so a closure that violates it raises at COMMIT rather than here.
-    The caller must commit inside its own error handling, or a failed close
-    will look like a success.
+    reefcare_close_report() writes the case_decision row and
+    terminal status together and enforces coordinator
+    ownership.
     """
 
     the_closure_result = await db.execute(
@@ -318,13 +328,21 @@ async def close_report(
             """
         ),
         {
-            "report_reference": report_reference,
-            "coordinator_id": coordinator_id,
-            "closure_reason_code": closure_reason_code,
-            "terminal_status_code": terminal_status_code,
-            "note": note,
-            "referred_to": referred_to,
+            "report_reference":
+                report_reference,
+            "coordinator_id":
+                coordinator_id,
+            "closure_reason_code":
+                closure_reason_code,
+            "terminal_status_code":
+                terminal_status_code,
+            "note":
+                note,
+            "referred_to":
+                referred_to,
         },
     )
 
-    return the_closure_result.scalar_one()
+    return (
+        the_closure_result.scalar_one()
+    )

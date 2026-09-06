@@ -8,6 +8,9 @@ from app.core.exceptions import (
     NotFoundError,
     WorkflowError,
 )
+from app.repositories.case_decision_repository import (
+    get_latest_decision,
+)
 from app.repositories.case_repository import (
     change_status,
     get_case,
@@ -62,6 +65,15 @@ async def get_coordinator_case(
     """
     Build the complete authorised coordinator review
     projection.
+
+    The response contains:
+    - report and observation details
+    - authorised precise location
+    - safe evidence metadata
+    - latest saved US5.4 response decision, when one exists
+
+    No decision is a valid state and returns
+    latestDecision = null.
     """
 
     case = await get_owned_case(
@@ -83,10 +95,18 @@ async def get_coordinator_case(
         )
     )
 
+    latest_decision = (
+        await get_latest_decision(
+            db=db,
+            report_reference=report_reference,
+        )
+    )
+
     return build_coordinator_case_projection(
         case=case,
         location=location,
         evidence_rows=evidence_rows,
+        latest_decision=latest_decision,
     )
 
 
