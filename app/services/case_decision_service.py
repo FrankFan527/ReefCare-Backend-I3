@@ -2,19 +2,23 @@
 # Case decision policy (US5.4).
 #
 # SECURITY NOTE:
-# Recording a response decision is a plain INSERT with no sanctioned
-# database function behind it, so PostgreSQL does not independently verify
-# case ownership for this operation.
+# Recording a response decision begins with an ownership check because the
+# case_decision INSERT itself does not independently enforce ownership.
 #
-# load_owned_case(...) is therefore required before any decision is saved.
-#
-# US5.4 starts only AFTER US5.3 has accepted the evidence. A normal response
-# decision must therefore be recorded while the case is in
+# US5.4 starts only AFTER US5.3 has accepted the evidence. Therefore a
+# response decision may only be recorded while the case is in
 # evidence_accepted.
 #
-# The decision endpoint deliberately does not move the case status.
-# response_type is persisted as the coordinator's recommendation/decision.
-# Terminal status changes remain the responsibility of US5.5 closure through
+# A successful response decision is non-terminal, but it must still move the
+# report into the corresponding canonical non-terminal status so observer
+# My Reports, detail and timeline all reflect the persisted decision.
+#
+# Mapping:
+#   monitoring_only       -> monitoring
+#   refer_or_share        -> referred
+#   intervention_required -> response_recommended
+#
+# Terminal closure remains the responsibility of US5.5 through
 # reefcare_close_report(...).
 # ---------------------------------------------------------------------------
 
@@ -24,6 +28,9 @@ from app.core.enums import CaseStatus
 from app.core.exceptions import WorkflowError
 from app.repositories.case_decision_repository import (
     save_case_decision,
+)
+from app.repositories.case_repository import (
+    change_status,
 )
 from app.services.case_workflow_service import (
     load_owned_case,
@@ -47,6 +54,25 @@ PERMITTED_RESPONSE_TYPES: set[str] = {
 }
 
 
+# Every successful US5.4 decision moves the report into a
+# canonical non-terminal case status.
+#
+# This is deliberately a status-code map rather than an
+# observer-label map. Observer wording remains owned by the
+# case_status table in PostgreSQL.
+STATUS_FOR_RESPONSE_TYPE: dict[str, str] = {
+    "monitoring_only": (
+        CaseStatus.MONITORING.value
+    ),
+    "refer_or_share": (
+        CaseStatus.REFERRED.value
+    ),
+    "intervention_required": (
+        CaseStatus.RESPONSE_RECOMMENDED.value
+    ),
+}
+
+
 def validate_response_type(
     response_type: str,
     referred_to: str | None,
@@ -66,7 +92,9 @@ def validate_response_type(
         raise WorkflowError(
             "response_type must be one of: "
             + ", ".join(
-                sorted(PERMITTED_RESPONSE_TYPES)
+                sorted(
+                    PERMITTED_RESPONSE_TYPES
+                )
             )
         )
 
@@ -87,17 +115,16 @@ def validate_case_is_ready_for_a_decision(
     """
     Enforce the US5.3 -> US5.4 workflow boundary.
 
-    US5.4 explicitly begins after the evidence has been
-    accepted.
+    US5.4 explicitly begins only after the evidence has
+    been accepted.
 
     Therefore:
         under_review      -> not ready
         needs_more_info   -> not ready
         evidence_accepted -> ready
 
-    This prevents a coordinator from bypassing the evidence
-    usability/credibility assessment and recording a
-    response decision directly from under_review.
+    This prevents a coordinator from bypassing the
+    evidence usability/credibility assessment.
     """
 
     if current_status_code != DECISION_READY_STATUS:
@@ -116,19 +143,28 @@ async def record_decision(
     referred_to: str | None = None,
 ) -> dict:
     """
-    Record a US5.4 response-type decision on an owned case.
+    Record a US5.4 response-type decision on an owned case
+    and move the case into its corresponding non-terminal
+    workflow status.
 
     Workflow:
         ownership check
         -> evidence_accepted state check
         -> response-type validation
-        -> decision persistence
+        -> save case_decision
+        -> move canonical case status
+        -> write decision_recorded case_event
 
-    Ownership is checked first so a coordinator who does
-    not own the case cannot use validation errors to learn
-    its current workflow state.
+    Both writes occur in the same database transaction.
+    The API route commits only after this service returns.
 
-    The caller owns the transaction commit.
+    PostgreSQL now() is transaction-scoped, so the
+    case_decision.decided_at and case_event.occurred_at
+    created during the same transaction use the same
+    transaction timestamp.
+
+    The status change is deliberately non-terminal.
+    Closing the case still requires US5.5.
     """
 
     the_case = await load_owned_case(
@@ -148,6 +184,7 @@ async def record_decision(
         referred_to=referred_to,
     )
 
+    # First persist the US5.4 decision.
     the_saved_decision = (
         await save_case_decision(
             db=db,
@@ -159,21 +196,44 @@ async def record_decision(
         )
     )
 
+    # Then move the report into the matching canonical
+    # non-terminal status.
+    #
+    # No observer-facing label is hardcoded here.
+    # reefcare_change_status() writes case_event and the
+    # observer APIs later obtain case_status.observer_label
+    # from PostgreSQL.
+    the_target_status = (
+        STATUS_FOR_RESPONSE_TYPE[
+            response_type
+        ]
+    )
+
+    await change_status(
+        db=db,
+        report_reference=report_reference,
+        status_code=the_target_status,
+        actor_user_id=coordinator_id,
+        note=None,
+        event_type="decision_recorded",
+    )
+
     return {
-        "report_reference": report_reference,
-        "response_type": (
+        "report_reference":
+            report_reference,
+
+        "response_type":
             the_saved_decision[
                 "response_type"
-            ]
-        ),
-        "decided_at": (
+            ],
+
+        "decided_at":
             the_saved_decision[
                 "decided_at"
-            ]
-        ),
-        "decided_by": (
+            ],
+
+        "decided_by":
             the_saved_decision[
                 "coordinator_id"
-            ]
-        ),
+            ],
     }

@@ -23,20 +23,78 @@ from app.schemas.report import (
 )
 
 
-class ObserverReportValidationError(ValueError):
-    """Raised when My Reports filter input is internally inconsistent."""
-
-
-def get_observer_outcome(report) -> str | None:
+class ObserverReportValidationError(
+    ValueError
+):
     """
-    Return the simplified observer-safe outcome.
-
-    The database function reefcare_my_reports() already returns
-    closure_reason.observer_label, so no Python status/closure-label
-    map is maintained here.
+    Raised when My Reports filter input is internally
+    inconsistent.
     """
 
-    return report.get("closure_label")
+
+# These are open, non-terminal statuses produced by a
+# persisted US5.4 response decision.
+#
+# Only the status codes are maintained here.
+# Observer-facing wording continues to come from
+# case_status.observer_label in PostgreSQL.
+OPEN_DECISION_STATUSES: set[str] = {
+    CaseStatus.MONITORING.value,
+    CaseStatus.REFERRED.value,
+    CaseStatus.RESPONSE_RECOMMENDED.value,
+}
+
+
+def get_observer_outcome(
+    report,
+) -> str | None:
+    """
+    Return the observer-safe outcome.
+
+    Priority:
+
+    1. A terminal closure label wins when the case is
+       closed.
+
+    2. An open case with a recorded US5.4 response uses
+       the current database-owned observer status label as
+       its outcome.
+
+    3. Earlier workflow states have no outcome yet.
+
+    This deliberately does NOT maintain a Python mapping
+    such as monitoring -> "Monitoring Recommended".
+    case_status.observer_label remains the source of truth.
+    """
+
+    closure_label = report.get(
+        "closure_label"
+    )
+
+    if closure_label is not None:
+        return closure_label
+
+    current_status = report.get(
+        "status"
+    )
+
+    if isinstance(
+        current_status,
+        CaseStatus,
+    ):
+        current_status = (
+            current_status.value
+        )
+
+    if (
+        current_status
+        in OPEN_DECISION_STATUSES
+    ):
+        return report.get(
+            "status_label"
+        )
+
+    return None
 
 
 def get_observer_closure_summary(
@@ -45,8 +103,10 @@ def get_observer_closure_summary(
     """
     Build the observer-facing closure summary.
 
-    Only the closure label and the note attached to the closing event
-    are exposed. Internal coordinator decision fields are intentionally
+    Only the closure label and the note attached to the
+    closing event are exposed.
+
+    Internal coordinator decision fields are intentionally
     absent from the projection.
     """
 
@@ -71,18 +131,22 @@ def build_observer_report_projection(
     location=None,
 ) -> ObserverReportDetailResponse:
     """
-    Shape an already observer-scoped database row into the public API
-    contract.
+    Shape an already observer-scoped database row into the
+    public API contract.
 
     This function deliberately has no fields for:
     - coordinator identity
     - internal case-status labels
-    - case-decision reasoning
+    - raw response_type
+    - decision notes
     - private evidence object keys
 
-    Precise location is included only when it has been returned by
-    reefcare_report_location(reference, observer_id), whose database
-    authorization rule is authoritative.
+    An open US5.4 decision is represented only through the
+    canonical observer-safe status/statusLabel/outcome.
+
+    Precise location is included only when returned by
+    reefcare_report_location(reference, observer_id), whose
+    database authorisation rule is authoritative.
     """
 
     precise_location = None
@@ -121,18 +185,30 @@ def build_observer_report_projection(
         report_reference=report[
             "report_reference"
         ],
-        threat_category=report["threat"],
-        description=report["description"],
-        observed_at=report["observed_at"],
+        threat_category=report[
+            "threat"
+        ],
+        description=report[
+            "description"
+        ],
+        observed_at=report[
+            "observed_at"
+        ],
         estimated_depth_metres=report[
             "estimated_depth_metres"
         ],
-        general_location=report["area"],
+        general_location=report[
+            "area"
+        ],
         dive_site=report.get(
             "dive_site_name"
         ),
-        precise_location=precise_location,
-        status=report["status"],
+        precise_location=(
+            precise_location
+        ),
+        status=report[
+            "status"
+        ],
         status_label=report[
             "status_label"
         ],
@@ -161,12 +237,20 @@ def build_observer_timeline(
     rows,
 ) -> ObserverTimelineResponse:
     """
-    Shape deterministic observer-safe timeline rows returned by
-    reefcare_report_timeline().
+    Shape deterministic observer-safe timeline rows returned
+    by reefcare_report_timeline().
+
+    The repository/database function already supplies only
+    case_status.observer_label and event occurrence time.
+
+    No raw response_type, coordinator identity or decision
+    note is exposed.
     """
 
     return ObserverTimelineResponse(
-        report_reference=report_reference,
+        report_reference=(
+            report_reference
+        ),
         timeline=[
             ObserverTimelineEvent(
                 status_label=row[
@@ -195,8 +279,10 @@ async def list_observer_reports(
     List only the authenticated observer's reports.
 
     Observer isolation starts in PostgreSQL through
-    reefcare_my_reports(observer_id). Filtering and pagination are then
-    applied to that already-scoped result set.
+    reefcare_my_reports(observer_id).
+
+    Filtering and pagination are then applied to that
+    already-scoped result set.
     """
 
     if (
@@ -204,8 +290,11 @@ async def list_observer_reports(
         and to_date is not None
         and from_date > to_date
     ):
-        raise ObserverReportValidationError(
-            "fromDate must be on or before toDate"
+        raise (
+            ObserverReportValidationError(
+                "fromDate must be on or "
+                "before toDate"
+            )
         )
 
     try:
@@ -237,7 +326,9 @@ async def list_observer_reports(
                 general_location=row[
                     "area"
                 ],
-                status=row["status"],
+                status=row[
+                    "status"
+                ],
                 status_label=row[
                     "status_label"
                 ],
@@ -277,10 +368,13 @@ async def get_observer_report(
     """
     Return one report owned by the authenticated observer.
 
-    The repository first scopes through reefcare_my_reports(), and the
-    precise-location lookup is separately authorized by
-    reefcare_report_location(). A report belonging to another observer
-    is therefore indistinguishable from a missing report at this API.
+    The repository first scopes through
+    reefcare_my_reports(), and precise location is
+    independently authorised through
+    reefcare_report_location().
+
+    A report belonging to another observer therefore
+    remains indistinguishable from a missing report.
     """
 
     try:
@@ -300,12 +394,14 @@ async def get_observer_report(
                 "Report not found"
             )
 
-        location = await get_report_location(
-            db=db,
-            report_reference=(
-                report_reference
-            ),
-            user_id=observer_id,
+        location = (
+            await get_report_location(
+                db=db,
+                report_reference=(
+                    report_reference
+                ),
+                user_id=observer_id,
+            )
         )
 
         return (
@@ -333,10 +429,12 @@ async def get_observer_report_timeline(
     report_reference: str,
 ) -> ObserverTimelineResponse:
     """
-    Return the observer-safe plain-language status timeline.
+    Return the observer-safe plain-language status
+    timeline.
 
-    A scoped report lookup is performed first so an empty timeline is
-    not used to guess whether another observer's report exists.
+    A scoped report lookup is performed first so an empty
+    timeline is not used to infer whether another
+    observer's report exists.
     """
 
     try:

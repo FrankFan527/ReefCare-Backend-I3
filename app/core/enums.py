@@ -30,8 +30,10 @@ class CaseStatus(str, Enum):
     NEEDS_MORE_INFO = "needs_more_info"
     EVIDENCE_ACCEPTED = "evidence_accepted"
 
+    # Non-terminal US5.4 response states.
     MONITORING = "monitoring"
     REFERRED = "referred"
+    RESPONSE_RECOMMENDED = "response_recommended"
 
     CLOSED_NO_ACTION = "closed_no_action"
     CLOSED_NOT_SUBSTANTIATED = "closed_not_substantiated"
