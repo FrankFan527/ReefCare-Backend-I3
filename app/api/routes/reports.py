@@ -48,6 +48,8 @@ from app.schemas.report import (
     ReportCompletenessRequest,
     ReportCompletenessResponse,
     ReportCreate,
+    ReportReviewRequest,
+    ReportReviewResponse,
     ReportSubmittedResponse,
 )
 from app.services.completeness_service import (
@@ -71,6 +73,9 @@ from app.services.observer_report_service import (
     get_observer_report,
     get_observer_report_timeline,
     list_observer_reports,
+)
+from app.services.report_review_service import (
+    review_report,
 )
 from app.services.report_service import (
     ReportValidationError,
@@ -282,6 +287,51 @@ async def check_report_location(
     )
 
     return LocationCheckResponse(
+        **result
+    )
+
+
+@router.post(
+    "/review",
+    response_model=(
+        ReportReviewResponse
+    ),
+)
+async def review_report_before_submission(
+    the_report_input: (
+        ReportReviewRequest
+    ),
+    current_observer: CurrentObserver,
+    db: DatabaseSession,
+):
+    """
+    Build the final Observer-facing report review before
+    submission.
+
+    This endpoint:
+    - does not persist a report
+    - does not upload evidence
+    - does not mutate workflow state
+    - does not call AI
+
+    It aggregates:
+    - completeness
+    - selected threat/site
+    - location information
+    - evidence metadata
+    - location warning
+    - unresolved AI suggestions
+    """
+
+    result = await review_report(
+        db=db,
+        observer_id=current_observer[
+            "user_id"
+        ],
+        report_data=the_report_input,
+    )
+
+    return ReportReviewResponse(
         **result
     )
 

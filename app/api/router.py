@@ -8,6 +8,7 @@ from app.api.routes import (
     dive_sessions,
     evidence,
     health,
+    public,
     reference,
     reports,
 )
@@ -22,11 +23,20 @@ api_router.include_router(
     tags=["Authentication"],
 )
 
+
 api_router.include_router(
     admin.router,
     prefix="/admin",
     tags=["Administration"],
 )
+
+
+api_router.include_router(
+    public.router,
+    prefix="/public",
+    tags=["Public Reef Information"],
+)
+
 
 api_router.include_router(
     coordinator.router,
@@ -34,11 +44,13 @@ api_router.include_router(
     tags=["Coordinator"],
 )
 
+
 api_router.include_router(
     case_actions.router,
     prefix="/coordinator",
     tags=["Case Actions"],
 )
+
 
 api_router.include_router(
     evidence.router,
@@ -46,11 +58,13 @@ api_router.include_router(
     tags=["Evidence"],
 )
 
+
 api_router.include_router(
     reference.router,
     prefix="/reference",
     tags=["Reference"],
 )
+
 
 api_router.include_router(
     dive_sessions.router,
@@ -58,11 +72,13 @@ api_router.include_router(
     tags=["Dive Sessions"],
 )
 
+
 api_router.include_router(
     reports.router,
     prefix="/reports",
     tags=["Reports"],
 )
+
 
 api_router.include_router(
     health.router,
