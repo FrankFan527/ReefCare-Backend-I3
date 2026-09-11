@@ -101,13 +101,13 @@ class ObservationLocationInput(APIModel):
         LocationSource | None
     ) = None
 
-    map_pin: (
-        MapPinInput | None
-    ) = None
+    # Existing I1 field.
+    # Retained for backward compatibility.
+    map_pin: MapPinInput | None = None
 
-    coordinates: (
-        MapPinInput | None
-    ) = None
+    # Used for manually entered coordinates or coordinates
+    # obtained from device/photo metadata.
+    coordinates: MapPinInput | None = None
 
     relocation_notes: str | None = Field(
         default=None,
@@ -118,8 +118,17 @@ class ObservationLocationInput(APIModel):
     def validate_location_source_shape(
         self,
     ):
+        """
+        Validate which coordinate representation may
+        accompany each provenance source.
+
+        Final location/confidence validation remains in
+        location_service.py.
+        """
+
         source = self.location_source
 
+        # I1 compatibility.
         if source is None:
             if self.map_pin is not None:
                 source = (
@@ -185,8 +194,12 @@ class ReportCompletenessLocationInput(
     APIModel
 ):
     """
-    Relaxed location representation used only by the
+    Relaxed location representation used only for the
     completeness checker.
+
+    Fields are optional because the purpose of this
+    endpoint is to identify an incomplete draft rather
+    than reject it before evaluation.
     """
 
     named_dive_site_id: (
@@ -229,8 +242,9 @@ class ReportCompletenessRequest(
     """
     Permissive representation of an unfinished report.
 
-    Missing required fields are accepted so the backend
-    can identify what is still needed.
+    Unlike ReportCreate, required fields are optional here
+    because this endpoint must be able to report which
+    fields are still missing.
     """
 
     threat_category_id: (
@@ -281,6 +295,16 @@ class ReportCompletenessResponse(
 ):
     """
     Deterministic readiness result for a report draft.
+
+    blocking_missing:
+        required information that has not been supplied
+
+    blocking_issues:
+        information that was supplied but is invalid or
+        inconsistent
+
+    recommended_missing:
+        useful information that does not block submission
     """
 
     is_submittable: bool
@@ -635,6 +659,12 @@ class ThreatCategoryResponse(APIModel):
 
 
 class ReportSubmittedResponse(APIModel):
+    """
+    Confirmation that a report was successfully submitted.
+
+    The existing Iteration 1 response contract is retained.
+    """
+
     report_reference: str
     status: str
 
@@ -644,16 +674,39 @@ class ReportSubmittedResponse(APIModel):
 
 
 class ObserverReportSummary(APIModel):
+    """
+    One Observer-safe item in My Reports.
+
+    Iteration 2 extends the existing summary with:
+    - observation time
+    - selected dive-site name
+    - whether the Observer needs to act
+    - last workflow update time
+
+    No coordinator identity or internal decision data is
+    included.
+    """
+
     report_reference: str
     threat_category: str
     general_location: str
+
+    dive_site: (
+        str | None
+    ) = None
+
+    observed_at: datetime
 
     status: CaseStatus
     status_label: str
 
     outcome: str | None = None
 
+    needs_attention: bool = False
+
     submitted_at: datetime
+
+    last_updated_at: datetime
 
 
 class ObserverReportListResponse(APIModel):
@@ -702,6 +755,14 @@ class ObserverClosureSummary(APIModel):
 
 
 class ObserverReportDetailResponse(APIModel):
+    """
+    Observer-safe detailed tracking view.
+
+    Iteration 2 adds evidence count, action-needed state
+    and last update time while preserving the existing
+    privacy boundary.
+    """
+
     report_reference: str
     threat_category: str
 
@@ -722,12 +783,16 @@ class ObserverReportDetailResponse(APIModel):
         ObserverLocationResponse | None
     ) = None
 
+    evidence_count: int = 0
+
     status: CaseStatus
     status_label: str
 
     outcome: (
         str | None
     ) = None
+
+    needs_attention: bool = False
 
     information_request_reason: (
         str | None
@@ -739,14 +804,38 @@ class ObserverReportDetailResponse(APIModel):
 
     submitted_at: datetime
 
+    last_updated_at: datetime
+
 
 class ObserverTimelineEvent(APIModel):
+    """
+    One Observer-safe timeline state.
+
+    The database supplies only the plain-language
+    case_status.observer_label and timestamp.
+    """
+
     status_label: str
     occurred_at: datetime
 
+    is_current: bool = False
+
 
 class ObserverTimelineResponse(APIModel):
+    """
+    Observer-safe report timeline plus explicit current
+    state.
+
+    current_status is the canonical code needed by the
+    frontend for deterministic behaviour.
+
+    current_status_label is the public/Observer wording.
+    """
+
     report_reference: str
+
+    current_status: CaseStatus
+    current_status_label: str
 
     timeline: list[
         ObserverTimelineEvent
@@ -756,6 +845,14 @@ class ObserverTimelineResponse(APIModel):
 class OpenInformationRequest(APIModel):
     """
     The request an observer still has to answer.
+
+    Carries the timestamp as well as the text. US6.3 AC5 asks for the relevant
+    timestamp and acting user on every interaction, and the observer half of
+    that is being able to see when they were asked.
+
+    requested_by is deliberately absent. The observer has no need for the
+    coordinator's user id, and the existing observer projections are careful
+    never to expose coordinator identity.
     """
 
     request_text: str
@@ -765,6 +862,10 @@ class OpenInformationRequest(APIModel):
 class InformationResponseCreate(APIModel):
     """
     An observer's answer to an open information request.
+
+    US6.3 AC2 allows text or optional evidence. This is the text path; photo
+    attachment is a separate change, and evidence.case_event_id already exists
+    in the database to carry it.
     """
 
     response_text: str = Field(
@@ -776,10 +877,13 @@ class InformationResponseCreate(APIModel):
     def response_text_must_not_be_blank(
         self,
     ):
-        if (
-            self.response_text.strip()
-            == ""
-        ):
+        """
+        min_length alone accepts a string of spaces, which would record an
+        empty answer as though the observer had responded and hand the
+        coordinator nothing to re-review.
+        """
+
+        if self.response_text.strip() == "":
             raise ValueError(
                 "responseText must not be empty"
             )
@@ -789,13 +893,15 @@ class InformationResponseCreate(APIModel):
 
 class InformationResponseAccepted(APIModel):
     """
-    Confirmation that the answer reached the existing
-    case.
+    Confirmation that the answer reached the existing case.
+
+    coordinator_retained is returned rather than assumed. US6.3 AC3 requires
+    the same report and the same coordinator to survive the response, and
+    returning the owner is how the frontend, and a test, can see that it did.
     """
 
     report_reference: str
     status: CaseStatus
-
     response_text: str
     responded_at: datetime
 
