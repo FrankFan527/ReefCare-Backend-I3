@@ -101,12 +101,8 @@ class ObservationLocationInput(APIModel):
         LocationSource | None
     ) = None
 
-    # Existing I1 field.
-    # Retained for backward compatibility.
     map_pin: MapPinInput | None = None
 
-    # Used for manually entered coordinates or coordinates
-    # obtained from device/photo metadata.
     coordinates: MapPinInput | None = None
 
     relocation_notes: str | None = Field(
@@ -118,24 +114,14 @@ class ObservationLocationInput(APIModel):
     def validate_location_source_shape(
         self,
     ):
-        """
-        Validate which coordinate representation may
-        accompany each provenance source.
-
-        Final location/confidence validation remains in
-        location_service.py.
-        """
-
         source = self.location_source
 
-        # I1 compatibility.
         if source is None:
             if self.map_pin is not None:
                 source = (
                     LocationSource
                     .MANUAL_MAP_PIN
                 )
-
             else:
                 source = (
                     LocationSource
@@ -195,12 +181,8 @@ class ReportCompletenessLocationInput(
     APIModel
 ):
     """
-    Relaxed location representation used only for the
+    Relaxed location representation used only by the
     completeness checker.
-
-    Fields are optional because the purpose of this
-    endpoint is to identify an incomplete draft rather
-    than reject it before evaluation.
     """
 
     named_dive_site_id: (
@@ -243,9 +225,8 @@ class ReportCompletenessRequest(
     """
     Permissive representation of an unfinished report.
 
-    Unlike ReportCreate, required fields are optional here
-    because this endpoint must be able to report which
-    fields are still missing.
+    Missing required fields are accepted so the backend
+    can identify what is still needed.
     """
 
     threat_category_id: (
@@ -296,16 +277,6 @@ class ReportCompletenessResponse(
 ):
     """
     Deterministic readiness result for a report draft.
-
-    blocking_missing:
-        required information that has not been supplied
-
-    blocking_issues:
-        information that was supplied but is invalid or
-        inconsistent
-
-    recommended_missing:
-        useful information that does not block submission
     """
 
     is_submittable: bool
@@ -316,6 +287,104 @@ class ReportCompletenessResponse(
     recommended_missing: list[str]
 
     summary: str
+
+
+class LocationCheckRequest(APIModel):
+    """
+    Advisory consistency check between a selected named
+    dive site and an optional precise observation point.
+
+    This check never modifies or blocks submission.
+    """
+
+    named_dive_site_id: int = Field(
+        gt=0,
+    )
+
+    location_source: LocationSource
+
+    map_pin: (
+        MapPinInput | None
+    ) = None
+
+    coordinates: (
+        MapPinInput | None
+    ) = None
+
+    @model_validator(mode="after")
+    def validate_location_shape(
+        self,
+    ):
+        if (
+            self.location_source
+            == LocationSource.MANUAL_MAP_PIN
+        ):
+            if self.map_pin is None:
+                raise ValueError(
+                    "mapPin is required when "
+                    "locationSource is manual_map_pin"
+                )
+
+            if self.coordinates is not None:
+                raise ValueError(
+                    "coordinates must not be supplied "
+                    "with manual_map_pin"
+                )
+
+        elif self.location_source in {
+            LocationSource.ENTERED_COORDINATES,
+            LocationSource.DEVICE_METADATA,
+        }:
+            if self.coordinates is None:
+                raise ValueError(
+                    "coordinates are required when "
+                    f"locationSource is "
+                    f"{self.location_source.value}"
+                )
+
+            if self.map_pin is not None:
+                raise ValueError(
+                    "mapPin must not be supplied for "
+                    f"{self.location_source.value}"
+                )
+
+        elif self.location_source in {
+            LocationSource.NAMED_DIVE_SITE,
+            LocationSource.UNKNOWN,
+        }:
+            if (
+                self.map_pin is not None
+                or self.coordinates is not None
+            ):
+                raise ValueError(
+                    f"{self.location_source.value} "
+                    "must not contain precise coordinates"
+                )
+
+        return self
+
+
+class LocationCheckResponse(APIModel):
+    """
+    Advisory site-to-point consistency result.
+
+    check_available becomes false when the selected site
+    does not yet have a reference centre coordinate.
+
+    A warning never blocks submission.
+    """
+
+    check_available: bool
+    has_warning: bool
+
+    warning_code: str | None = None
+    message: str | None = None
+
+    distance_metres: int | None = None
+    threshold_metres: int | None = None
+
+    selected_site_id: int
+    selected_site_name: str | None = None
 
 
 class ReportCreate(APIModel):
@@ -343,11 +412,6 @@ class ReportCreate(APIModel):
 
     location: ObservationLocationInput
 
-    # Optional I2 metadata for uploaded evidence.
-    #
-    # Backward compatibility:
-    # an empty list means the old I1 request contract still
-    # works and captured_at will be stored as NULL.
     evidence_metadata: list[
         EvidenceMetadataInput
     ] = Field(

@@ -13,8 +13,12 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import ValidationError
-from sqlalchemy.exc import DBAPIError
+from pydantic import (
+    ValidationError,
+)
+from sqlalchemy.exc import (
+    DBAPIError,
+)
 
 from app.api.dependencies.authorization import (
     CurrentObserver,
@@ -29,9 +33,14 @@ from app.core.exceptions import (
     DatabaseOperationError,
     NotFoundError,
 )
+from app.repositories.reference_repository import (
+    get_dive_site_location_reference,
+)
 from app.schemas.report import (
     InformationResponseAccepted,
     InformationResponseCreate,
+    LocationCheckRequest,
+    LocationCheckResponse,
     ObserverReportDetailResponse,
     ObserverReportListResponse,
     ObserverTimelineResponse,
@@ -52,6 +61,10 @@ from app.services.evidence_service import (
 from app.services.information_service import (
     get_open_request_for_observer,
     respond_to_information_request,
+)
+from app.services.location_service import (
+    evaluate_site_distance_warning,
+    get_submitted_precise_point,
 )
 from app.services.observer_report_service import (
     ObserverReportValidationError,
@@ -150,10 +163,7 @@ async def check_report_completeness(
     - does not persist anything
     - does not upload evidence
     - does not call AI
-    - does not change case workflow state
-
-    The same canonical reference-data and location rules
-    used by final submission are reused here.
+    - does not change workflow state
     """
 
     result = (
@@ -167,6 +177,111 @@ async def check_report_completeness(
     )
 
     return ReportCompletenessResponse(
+        **result
+    )
+
+
+@router.post(
+    "/location-check",
+    response_model=(
+        LocationCheckResponse
+    ),
+)
+async def check_report_location(
+    the_location_input: (
+        LocationCheckRequest
+    ),
+    current_observer: CurrentObserver,
+    db: DatabaseSession,
+):
+    """
+    Perform an advisory consistency check between the
+    selected named dive site and a supplied precise point.
+
+    The result is never a submission blocker.
+
+    This endpoint:
+    - does not persist data
+    - does not modify coordinates
+    - does not modify the selected dive site
+    - does not call AI
+    """
+
+    site_reference = (
+        await get_dive_site_location_reference(
+            db=db,
+            dive_site_id=(
+                the_location_input
+                .named_dive_site_id
+            ),
+        )
+    )
+
+    if site_reference is None:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+            ),
+            detail="Dive site not found",
+        )
+
+    map_pin = (
+        the_location_input.map_pin
+    )
+
+    coordinates = (
+        the_location_input.coordinates
+    )
+
+    (
+        submitted_latitude,
+        submitted_longitude,
+    ) = get_submitted_precise_point(
+        source=(
+            the_location_input
+            .location_source
+        ),
+
+        map_pin_latitude=(
+            map_pin.latitude
+            if map_pin is not None
+            else None
+        ),
+
+        map_pin_longitude=(
+            map_pin.longitude
+            if map_pin is not None
+            else None
+        ),
+
+        coordinate_latitude=(
+            coordinates.latitude
+            if coordinates is not None
+            else None
+        ),
+
+        coordinate_longitude=(
+            coordinates.longitude
+            if coordinates is not None
+            else None
+        ),
+    )
+
+    result = (
+        evaluate_site_distance_warning(
+            site_reference=(
+                site_reference
+            ),
+            submitted_latitude=(
+                submitted_latitude
+            ),
+            submitted_longitude=(
+                submitted_longitude
+            ),
+        )
+    )
+
+    return LocationCheckResponse(
         **result
     )
 
@@ -344,10 +459,7 @@ async def get_open_information_request_for_report(
 ):
     """
     Return the request awaiting this observer's answer,
-    or null when there is no open request.
-
-    A report with no outstanding question is a normal
-    state, not a missing resource.
+    or null when no request is currently open.
     """
 
     try:
@@ -405,12 +517,10 @@ async def submit_information_response(
     db: DatabaseSession,
 ):
     """
-    Attach the observer's answer to the existing case.
+    Attach the observer's response to the existing report.
 
-    The commit sits inside the try because the status move
-    can be refused by PostgreSQL, and returning 200 for a
-    response that was rolled back would incorrectly tell
-    the observer their response was delivered.
+    Report reference and coordinator ownership remain
+    unchanged.
     """
 
     the_observer_id = (
@@ -457,17 +567,23 @@ async def submit_information_response(
                 "report_reference"
             ]
         ),
+
         status=(
-            the_result["status"]
+            the_result[
+                "status"
+            ]
         ),
+
         response_text=(
             the_result[
                 "response_text"
             ]
         ),
+
         responded_at=datetime.now(
             timezone.utc
         ),
+
         coordinator_retained=(
             the_result[
                 "coordinator_retained"

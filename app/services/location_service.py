@@ -1,8 +1,7 @@
 # ---------------------------------------------------------------------------
 # Observation location handling (TC-407 / US4).
 #
-# PostgreSQL already owns five canonical location_source
-# codes:
+# PostgreSQL owns five canonical location_source codes:
 #
 #   named_dive_site
 #   manual_map_pin
@@ -10,12 +9,22 @@
 #   device_metadata
 #   unknown
 #
-# This service normalises API input into those exact codes.
+# This service:
+# - normalises submitted location data
+# - validates source/confidence combinations
+# - performs advisory site-to-point distance checks
 #
-# No database access occurs here.
+# It does not perform database access.
 # ---------------------------------------------------------------------------
 
 from decimal import Decimal
+from math import (
+    asin,
+    cos,
+    radians,
+    sin,
+    sqrt,
+)
 
 from app.core.enums import (
     LocationSource,
@@ -68,6 +77,11 @@ VALID_LOCATION_CONFIDENCE_CODES: set[
 ] = (
     CONFIDENCE_CODES_REQUIRING_COORDINATES
     | CONFIDENCE_CODES_WITHOUT_COORDINATES
+)
+
+
+EARTH_RADIUS_METRES: float = (
+    6_371_000.0
 )
 
 
@@ -131,11 +145,9 @@ def resolve_location_source(
     Resolve the canonical source while preserving I1
     compatibility.
 
-    Legacy requests:
+    Legacy:
         mapPin present -> manual_map_pin
         no mapPin      -> named_dive_site
-
-    I2 requests should send locationSource explicitly.
     """
 
     if submitted_source is not None:
@@ -165,8 +177,8 @@ def validate_location_source_shape(
     has_coordinates: bool,
 ) -> None:
     """
-    Ensure the coordinate representation matches the
-    declared provenance.
+    Ensure coordinate representation matches the declared
+    location source.
     """
 
     if (
@@ -416,4 +428,347 @@ def normalise_observation_location(
 
         "relocation_notes":
             normalised_notes,
+    }
+
+
+def calculate_distance_metres(
+    *,
+    latitude_one: float | Decimal,
+    longitude_one: float | Decimal,
+    latitude_two: float | Decimal,
+    longitude_two: float | Decimal,
+) -> float:
+    """
+    Calculate great-circle distance using the Haversine
+    formula.
+    """
+
+    lat1 = radians(
+        float(latitude_one)
+    )
+
+    lon1 = radians(
+        float(longitude_one)
+    )
+
+    lat2 = radians(
+        float(latitude_two)
+    )
+
+    lon2 = radians(
+        float(longitude_two)
+    )
+
+    delta_lat = (
+        lat2 - lat1
+    )
+
+    delta_lon = (
+        lon2 - lon1
+    )
+
+    haversine_value = (
+        sin(
+            delta_lat / 2
+        ) ** 2
+        + cos(lat1)
+        * cos(lat2)
+        * sin(
+            delta_lon / 2
+        ) ** 2
+    )
+
+    angular_distance = (
+        2
+        * asin(
+            sqrt(
+                haversine_value
+            )
+        )
+    )
+
+    return (
+        EARTH_RADIUS_METRES
+        * angular_distance
+    )
+
+
+def get_submitted_precise_point(
+    *,
+    source: LocationSource,
+    map_pin_latitude: (
+        float | Decimal | None
+    ) = None,
+    map_pin_longitude: (
+        float | Decimal | None
+    ) = None,
+    coordinate_latitude: (
+        float | Decimal | None
+    ) = None,
+    coordinate_longitude: (
+        float | Decimal | None
+    ) = None,
+) -> tuple[
+    float | Decimal | None,
+    float | Decimal | None,
+]:
+    """
+    Resolve the precise point to use for advisory distance
+    checking.
+
+    named_dive_site and unknown contain no report-specific
+    precise point.
+    """
+
+    if (
+        source
+        == LocationSource.MANUAL_MAP_PIN
+    ):
+        validate_coordinates(
+            latitude=(
+                map_pin_latitude
+            ),
+            longitude=(
+                map_pin_longitude
+            ),
+        )
+
+        return (
+            map_pin_latitude,
+            map_pin_longitude,
+        )
+
+    if source in {
+        LocationSource.ENTERED_COORDINATES,
+        LocationSource.DEVICE_METADATA,
+    }:
+        validate_coordinates(
+            latitude=(
+                coordinate_latitude
+            ),
+            longitude=(
+                coordinate_longitude
+            ),
+        )
+
+        return (
+            coordinate_latitude,
+            coordinate_longitude,
+        )
+
+    return (
+        None,
+        None,
+    )
+
+
+def evaluate_site_distance_warning(
+    *,
+    site_reference,
+    submitted_latitude: (
+        float | Decimal | None
+    ),
+    submitted_longitude: (
+        float | Decimal | None
+    ),
+) -> dict:
+    """
+    Compare a submitted precise point with the selected
+    dive site's reference centre.
+
+    default_uncertainty_metres is used as the canonical
+    warning threshold.
+
+    This is advisory only.
+    """
+
+    site_id = (
+        site_reference[
+            "dive_site_id"
+        ]
+    )
+
+    site_name = (
+        site_reference[
+            "name"
+        ]
+    )
+
+    site_latitude = (
+        site_reference[
+            "centre_latitude"
+        ]
+    )
+
+    site_longitude = (
+        site_reference[
+            "centre_longitude"
+        ]
+    )
+
+    threshold_metres = (
+        site_reference[
+            "default_uncertainty_metres"
+        ]
+    )
+
+    if (
+        submitted_latitude is None
+        or submitted_longitude is None
+    ):
+        return {
+            "check_available":
+                False,
+
+            "has_warning":
+                False,
+
+            "warning_code":
+                None,
+
+            "message":
+                (
+                    "No precise report location "
+                    "was supplied, so no distance "
+                    "check was required."
+                ),
+
+            "distance_metres":
+                None,
+
+            "threshold_metres":
+                threshold_metres,
+
+            "selected_site_id":
+                site_id,
+
+            "selected_site_name":
+                site_name,
+        }
+
+    if (
+        site_latitude is None
+        or site_longitude is None
+    ):
+        return {
+            "check_available":
+                False,
+
+            "has_warning":
+                False,
+
+            "warning_code":
+                None,
+
+            "message":
+                (
+                    "A reference coordinate is not "
+                    "currently available for the "
+                    "selected dive site."
+                ),
+
+            "distance_metres":
+                None,
+
+            "threshold_metres":
+                threshold_metres,
+
+            "selected_site_id":
+                site_id,
+
+            "selected_site_name":
+                site_name,
+        }
+
+    distance = (
+        calculate_distance_metres(
+            latitude_one=(
+                site_latitude
+            ),
+            longitude_one=(
+                site_longitude
+            ),
+            latitude_two=(
+                submitted_latitude
+            ),
+            longitude_two=(
+                submitted_longitude
+            ),
+        )
+    )
+
+    rounded_distance = (
+        round(distance)
+    )
+
+    threshold = (
+        int(threshold_metres)
+    )
+
+    has_warning = (
+        distance > threshold
+    )
+
+    if has_warning:
+        return {
+            "check_available":
+                True,
+
+            "has_warning":
+                True,
+
+            "warning_code":
+                (
+                    "location_far_from_selected_site"
+                ),
+
+            "message":
+                (
+                    "The supplied location appears "
+                    "far from the selected dive site. "
+                    "Please review the site and location "
+                    "before submitting."
+                ),
+
+            "distance_metres":
+                rounded_distance,
+
+            "threshold_metres":
+                threshold,
+
+            "selected_site_id":
+                site_id,
+
+            "selected_site_name":
+                site_name,
+        }
+
+    return {
+        "check_available":
+            True,
+
+        "has_warning":
+            False,
+
+        "warning_code":
+            None,
+
+        "message":
+            (
+                "The supplied location is within "
+                "the selected dive site's reference "
+                "range."
+            ),
+
+        "distance_metres":
+            rounded_distance,
+
+        "threshold_metres":
+            threshold,
+
+        "selected_site_id":
+            site_id,
+
+        "selected_site_name":
+            site_name,
     }
