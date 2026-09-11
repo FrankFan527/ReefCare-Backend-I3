@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 
 from pydantic import (
     Field,
@@ -8,6 +9,34 @@ from pydantic import (
 
 from app.core.enums import CaseStatus
 from app.schemas.common import APIModel
+
+
+class EvidenceCompleteness(str, Enum):
+    """
+    US5.1 AC1 evidence-completeness indicator.
+
+    Computed on read, never stored. These are API vocabulary rather than
+    database codes, which is why they sit here beside the queue item and not
+    in core/enums.py, where every value is documented as matching a column
+    in PostgreSQL.
+    """
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    MINIMAL = "minimal"
+
+
+class CasePriority(str, Enum):
+    """
+    US5.7 priority cue. Also computed, also never stored.
+
+    A cue, not a verdict. US5.7 AC3 requires that it never verifies the
+    threat, closes the case or makes the conservation decision.
+    """
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    STANDARD = "standard"
 
 
 class CaseOwnerResponse(APIModel):
@@ -35,6 +64,19 @@ class CoordinatorQueueItem(APIModel):
 
     submitted_at: datetime
     hours_in_queue: int
+
+    # US5.1 AC1: how much of this report can actually be
+    # reviewed. evidence_count sits beside the indicator so
+    # a coordinator can see the number behind the word.
+    evidence_completeness: EvidenceCompleteness
+    evidence_count: int
+
+    # US5.7: the cue, and the rules that produced it. The
+    # reasons are not decoration. AC2 asks for a priority
+    # the coordinator can understand, and a bare band tells
+    # them the conclusion without the reasoning.
+    priority: CasePriority
+    priority_reasons: list[str]
 
     owner: CaseOwnerResponse | None = None
     claimed_at: datetime | None = None

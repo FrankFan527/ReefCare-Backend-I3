@@ -8,6 +8,7 @@ from app.schemas.case import (
     CoordinatorQueueItem,
     CoordinatorQueueResponse,
 )
+from app.services.triage_priority_service import build_triage_cues
 
 
 async def list_incoming_reports(
@@ -48,6 +49,19 @@ def build_queue_response(
 
     Claimed reports include their current owner and claim
     time. Unclaimed reports return null for both fields.
+
+    US5.1 AC1 and US5.7 add the two triage cues. They are
+    computed here rather than stored, because both depend
+    on how long the report has been waiting, and a stored
+    value would be wrong the moment after it was written.
+
+    KNOWN LIMIT, recorded rather than hidden: because the
+    cues are computed after the repository has paginated,
+    the queue cannot be sorted by priority across pages.
+    Each page is ordered oldest-first and carries its own
+    priorities. At Iteration 2 volumes this is invisible.
+    If the team later wants a priority-ordered queue, the
+    rules have to move into SQL, and this note is why.
     """
 
     items = []
@@ -62,6 +76,24 @@ def build_queue_response(
                     row["owner_display_name"]
                 ),
             )
+
+        # the two triage cues, derived from the raw
+        # signals the repository returned
+        (
+            the_evidence_completeness,
+            the_priority,
+            the_priority_reasons,
+        ) = build_triage_cues(
+            threat_code=row["threat_code"],
+            evidence_count=row["evidence_count"],
+            has_location_detail=bool(
+                row["has_location_detail"]
+            ),
+            description_length=row[
+                "description_length"
+            ],
+            hours_in_queue=row["hours_in_queue"],
+        )
 
         items.append(
             CoordinatorQueueItem(
@@ -82,6 +114,16 @@ def build_queue_response(
                 hours_in_queue=row[
                     "hours_in_queue"
                 ],
+                evidence_completeness=(
+                    the_evidence_completeness
+                ),
+                evidence_count=row[
+                    "evidence_count"
+                ],
+                priority=the_priority,
+                priority_reasons=(
+                    the_priority_reasons
+                ),
                 owner=owner,
                 claimed_at=row[
                     "claimed_at"
