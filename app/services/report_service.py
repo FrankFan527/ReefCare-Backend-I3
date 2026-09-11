@@ -16,6 +16,7 @@ from app.repositories import (
     report_repository,
 )
 from app.schemas.report import (
+    EvidenceMetadataInput,
     ReportCreate,
 )
 from app.services.evidence_service import (
@@ -54,52 +55,67 @@ def _normalise_location(
     reports route.
     """
 
-    location = report_data.location
+    location = (
+        report_data.location
+    )
 
-    map_pin = location.map_pin
-    coordinates = location.coordinates
+    map_pin = (
+        location.map_pin
+    )
+
+    coordinates = (
+        location.coordinates
+    )
 
     try:
-        return normalise_observation_location(
-            named_dive_site_id=(
-                location.named_dive_site_id
-            ),
+        return (
+            normalise_observation_location(
+                named_dive_site_id=(
+                    location
+                    .named_dive_site_id
+                ),
 
-            submitted_source=(
-                location.location_source
-            ),
+                submitted_source=(
+                    location
+                    .location_source
+                ),
 
-            submitted_confidence_code=(
-                location.location_confidence
-            ),
+                submitted_confidence_code=(
+                    location
+                    .location_confidence
+                ),
 
-            map_pin_latitude=(
-                map_pin.latitude
-                if map_pin is not None
-                else None
-            ),
+                map_pin_latitude=(
+                    map_pin.latitude
+                    if map_pin is not None
+                    else None
+                ),
 
-            map_pin_longitude=(
-                map_pin.longitude
-                if map_pin is not None
-                else None
-            ),
+                map_pin_longitude=(
+                    map_pin.longitude
+                    if map_pin is not None
+                    else None
+                ),
 
-            coordinate_latitude=(
-                coordinates.latitude
-                if coordinates is not None
-                else None
-            ),
+                coordinate_latitude=(
+                    coordinates.latitude
+                    if coordinates
+                    is not None
+                    else None
+                ),
 
-            coordinate_longitude=(
-                coordinates.longitude
-                if coordinates is not None
-                else None
-            ),
+                coordinate_longitude=(
+                    coordinates.longitude
+                    if coordinates
+                    is not None
+                    else None
+                ),
 
-            relocation_notes=(
-                location.relocation_notes
-            ),
+                relocation_notes=(
+                    location
+                    .relocation_notes
+                ),
+            )
         )
 
     except LocationValidationError as exc:
@@ -121,8 +137,8 @@ async def _validate_reference_data(
     Resolve API values against PostgreSQL reference data.
 
     Location source is already normalised into one of the
-    five canonical TC-407 values and is then checked
-    against location_source.
+    five canonical TC-407 values and is checked against
+    location_source before final submission.
     """
 
     threat_category = (
@@ -178,19 +194,63 @@ async def _validate_reference_data(
         )
 
     return (
-        dict(threat_category),
-        dict(location_confidence),
+        dict(
+            threat_category
+        ),
+        dict(
+            location_confidence
+        ),
     )
 
 
-async def _store_evidence_files(
+def _validate_evidence_metadata_count(
+    *,
     photos: list[UploadFile],
+    evidence_metadata: list[
+        EvidenceMetadataInput
+    ],
+) -> None:
+    """
+    Validate positional evidence-metadata mapping.
+
+    Backward compatibility:
+    - an empty metadata list is valid
+    - one metadata item per photo is valid
+
+    A partial metadata list is rejected because positional
+    matching would otherwise become ambiguous.
+    """
+
+    if not evidence_metadata:
+        return
+
+    if (
+        len(evidence_metadata)
+        != len(photos)
+    ):
+        raise EvidenceValidationError(
+            "evidenceMetadata must either be empty "
+            "or contain one entry for each photo"
+        )
+
+
+async def _store_evidence_files(
+    *,
+    photos: list[UploadFile],
+    evidence_metadata: list[
+        EvidenceMetadataInput
+    ],
 ) -> tuple[
     list[StoredEvidence],
     list[dict[str, Any]],
 ]:
     """
     Validate and privately store every uploaded photo.
+
+    evidenceMetadata[i] corresponds to photos[i].
+
+    Metadata is optional so the Iteration 1 submission
+    contract remains valid.
     """
 
     if not photos:
@@ -198,6 +258,13 @@ async def _store_evidence_files(
             "At least one photograph "
             "is required"
         )
+
+    _validate_evidence_metadata_count(
+        photos=photos,
+        evidence_metadata=(
+            evidence_metadata
+        ),
+    )
 
     stored_files: list[
         StoredEvidence
@@ -208,9 +275,13 @@ async def _store_evidence_files(
     ] = []
 
     try:
-        for photo in photos:
-            content = await validate_photo(
-                photo
+        for index, photo in enumerate(
+            photos
+        ):
+            content = (
+                await validate_photo(
+                    photo
+                )
             )
 
             stored_file = (
@@ -224,10 +295,23 @@ async def _store_evidence_files(
                 stored_file
             )
 
+            captured_at = None
+
+            if evidence_metadata:
+                captured_at = (
+                    evidence_metadata[
+                        index
+                    ].captured_at
+                )
+
             evidence_items.append(
                 prepare_evidence_metadata(
-                    stored_file=stored_file,
-                    captured_at=None,
+                    stored_file=(
+                        stored_file
+                    ),
+                    captured_at=(
+                        captured_at
+                    ),
                 )
             )
 
@@ -258,13 +342,23 @@ async def submit_report(
     Submit a complete observation report.
 
     TC-407:
-    all five location provenance codes are now preserved
-    distinctly from request validation through PostgreSQL
-    persistence.
+    all five location provenance codes are preserved
+    distinctly from API validation through PostgreSQL.
 
-    PostgreSQL remains authoritative for final submission,
-    report creation, location creation, evidence rows and
-    workflow events.
+    US4.1:
+    optional capturedAt metadata is mapped to uploaded
+    evidence by array position.
+
+    Evidence metadata is contextual only and does not
+    change the confirmed dive session, site or location.
+
+    PostgreSQL remains authoritative for:
+    - report creation
+    - evidence rows
+    - evidence -> dive-session association
+    - report location
+    - case status
+    - workflow events
     """
 
     if observer_id <= 0:
@@ -278,12 +372,22 @@ async def submit_report(
             "is required"
         )
 
+    # Validate metadata/photo positional mapping before
+    # any object is uploaded to private storage.
+    _validate_evidence_metadata_count(
+        photos=photos,
+        evidence_metadata=(
+            report_data
+            .evidence_metadata
+        ),
+    )
+
     stored_files: list[
         StoredEvidence
     ] = []
 
     try:
-        # Normalise before any evidence is stored.
+        # Normalise location before any evidence is stored.
         normalised_location = (
             _normalise_location(
                 report_data
@@ -309,7 +413,9 @@ async def submit_report(
                     report_data
                     .dive_session_id
                 ),
-                observer_id=observer_id,
+                observer_id=(
+                    observer_id
+                ),
             )
         )
 
@@ -336,7 +442,11 @@ async def submit_report(
             stored_files,
             evidence_items,
         ) = await _store_evidence_files(
-            photos
+            photos=photos,
+            evidence_metadata=(
+                report_data
+                .evidence_metadata
+            ),
         )
 
         report_reference = (
@@ -344,7 +454,9 @@ async def submit_report(
             .submit_report(
                 db=db,
 
-                observer_id=observer_id,
+                observer_id=(
+                    observer_id
+                ),
 
                 dive_session_id=(
                     report_data
@@ -352,15 +464,19 @@ async def submit_report(
                 ),
 
                 threat_category_code=(
-                    threat_category["code"]
+                    threat_category[
+                        "code"
+                    ]
                 ),
 
                 description=(
-                    report_data.description
+                    report_data
+                    .description
                 ),
 
                 observed_at=(
-                    report_data.observed_at
+                    report_data
+                    .observed_at
                 ),
 
                 location_source_code=(
@@ -375,7 +491,9 @@ async def submit_report(
                     ]
                 ),
 
-                evidence=evidence_items,
+                evidence=(
+                    evidence_items
+                ),
 
                 estimated_depth_metres=(
                     report_data
@@ -409,7 +527,9 @@ async def submit_report(
                 report_reference=(
                     report_reference
                 ),
-                observer_id=observer_id,
+                observer_id=(
+                    observer_id
+                ),
             )
         )
 
@@ -426,7 +546,9 @@ async def submit_report(
                 ],
 
             "status":
-                confirmation["status"],
+                confirmation[
+                    "status"
+                ],
 
             "submitted_at":
                 confirmation[
