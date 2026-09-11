@@ -99,15 +99,13 @@ def _normalise_location(
 
                 coordinate_latitude=(
                     coordinates.latitude
-                    if coordinates
-                    is not None
+                    if coordinates is not None
                     else None
                 ),
 
                 coordinate_longitude=(
                     coordinates.longitude
-                    if coordinates
-                    is not None
+                    if coordinates is not None
                     else None
                 ),
 
@@ -137,7 +135,7 @@ async def _validate_reference_data(
     Resolve API values against PostgreSQL reference data.
 
     Location source is already normalised into one of the
-    five canonical TC-407 values and is checked against
+    five canonical values and is checked against
     location_source before final submission.
     """
 
@@ -217,8 +215,8 @@ def _validate_evidence_metadata_count(
     - an empty metadata list is valid
     - one metadata item per photo is valid
 
-    A partial metadata list is rejected because positional
-    matching would otherwise become ambiguous.
+    Partial metadata is rejected because positional
+    mapping would be ambiguous.
     """
 
     if not evidence_metadata:
@@ -231,6 +229,36 @@ def _validate_evidence_metadata_count(
         raise EvidenceValidationError(
             "evidenceMetadata must either be empty "
             "or contain one entry for each photo"
+        )
+
+
+def _validate_ai_suggestions_resolved(
+    report_data: ReportCreate,
+) -> None:
+    """
+    Defensive service-level enforcement of the US4.5
+    authority boundary.
+
+    Smart Report Structuring is assistive only.
+
+    Final report submission cannot proceed while any AI
+    suggestion remains unresolved.
+    """
+
+    unresolved_suggestions = [
+        suggestion
+        for suggestion
+        in report_data.ai_suggestions
+        if (
+            suggestion.status
+            == "unresolved"
+        )
+    ]
+
+    if unresolved_suggestions:
+        raise ReportValidationError(
+            "All AI suggestions must be resolved "
+            "before final submission"
         )
 
 
@@ -341,16 +369,15 @@ async def submit_report(
     """
     Submit a complete observation report.
 
-    TC-407:
-    all five location provenance codes are preserved
-    distinctly from API validation through PostgreSQL.
-
-    US4.1:
-    optional capturedAt metadata is mapped to uploaded
-    evidence by array position.
-
-    Evidence metadata is contextual only and does not
-    change the confirmed dive session, site or location.
+    Final-submission boundary:
+    - Observer identity is required
+    - required report fields have passed ReportCreate
+    - all AI suggestions must be resolved
+    - location values are canonicalised
+    - references are validated
+    - dive session must belong to the Observer
+    - selected site must match the dive session
+    - evidence is validated and stored privately
 
     PostgreSQL remains authoritative for:
     - report creation
@@ -366,14 +393,16 @@ async def submit_report(
             "Invalid observer"
         )
 
+    _validate_ai_suggestions_resolved(
+        report_data
+    )
+
     if not photos:
         raise EvidenceValidationError(
             "At least one photograph "
             "is required"
         )
 
-    # Validate metadata/photo positional mapping before
-    # any object is uploaded to private storage.
     _validate_evidence_metadata_count(
         photos=photos,
         evidence_metadata=(
@@ -387,7 +416,6 @@ async def submit_report(
     ] = []
 
     try:
-        # Normalise location before any evidence is stored.
         normalised_location = (
             _normalise_location(
                 report_data
@@ -408,7 +436,7 @@ async def submit_report(
         dive_session = (
             await report_repository
             .get_owned_dive_session(
-                db,
+                db=db,
                 dive_session_id=(
                     report_data
                     .dive_session_id

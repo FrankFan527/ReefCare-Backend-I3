@@ -101,9 +101,13 @@ class ObservationLocationInput(APIModel):
         LocationSource | None
     ) = None
 
-    map_pin: MapPinInput | None = None
+    map_pin: (
+        MapPinInput | None
+    ) = None
 
-    coordinates: MapPinInput | None = None
+    coordinates: (
+        MapPinInput | None
+    ) = None
 
     relocation_notes: str | None = Field(
         default=None,
@@ -289,6 +293,109 @@ class ReportCompletenessResponse(
     summary: str
 
 
+class AISuggestionState(APIModel):
+    """
+    Current Observer-side resolution state for one AI
+    suggestion.
+
+    AI output is never authoritative.
+
+    Valid status values:
+    - unresolved
+    - confirmed
+    - corrected
+    - removed
+    """
+
+    field: str = Field(
+        min_length=1,
+        max_length=100,
+    )
+
+    suggested_value: (
+        str | None
+    ) = None
+
+    status: str
+
+    @model_validator(mode="after")
+    def validate_status(
+        self,
+    ):
+        permitted_statuses = {
+            "unresolved",
+            "confirmed",
+            "corrected",
+            "removed",
+        }
+
+        if self.status not in permitted_statuses:
+            raise ValueError(
+                "AI suggestion status must be one of: "
+                + ", ".join(
+                    sorted(
+                        permitted_statuses
+                    )
+                )
+            )
+
+        return self
+
+
+class ReportReviewRequest(
+    ReportCompletenessRequest
+):
+    """
+    Final non-persistent Observer review input.
+
+    This model intentionally extends the permissive
+    completeness request so a review may still explain why
+    a draft is not yet ready.
+
+    evidence_count describes how many evidence items will
+    be submitted.
+
+    evidence_metadata contains optional capturedAt values.
+
+    ai_suggestions carries suggestion resolution state only.
+    """
+
+    evidence_metadata: list[
+        EvidenceMetadataInput
+    ] = Field(
+        default_factory=list,
+    )
+
+    ai_suggestions: list[
+        AISuggestionState
+    ] = Field(
+        default_factory=list,
+    )
+
+
+class ReportReviewSummary(APIModel):
+    threat: dict | None = None
+
+    observed_at: datetime | None = None
+
+    estimated_depth_metres: (
+        float | None
+    ) = None
+
+    description: str | None = None
+
+    dive_session: dict | None = None
+    dive_site: dict | None = None
+
+    location_source: (
+        LocationSource | None
+    ) = None
+
+    location_confidence: (
+        str | None
+    ) = None
+
+
 class LocationCheckRequest(APIModel):
     """
     Advisory consistency check between a selected named
@@ -377,14 +484,52 @@ class LocationCheckResponse(APIModel):
     check_available: bool
     has_warning: bool
 
-    warning_code: str | None = None
-    message: str | None = None
+    warning_code: (
+        str | None
+    ) = None
 
-    distance_metres: int | None = None
-    threshold_metres: int | None = None
+    message: (
+        str | None
+    ) = None
+
+    distance_metres: (
+        int | None
+    ) = None
+
+    threshold_metres: (
+        int | None
+    ) = None
 
     selected_site_id: int
-    selected_site_name: str | None = None
+
+    selected_site_name: (
+        str | None
+    ) = None
+
+
+class ReportReviewResponse(APIModel):
+    """
+    Aggregated Observer review result before final report
+    submission.
+    """
+
+    is_submittable: bool
+
+    completeness: (
+        ReportCompletenessResponse
+    )
+
+    unresolved_suggestions: list[
+        AISuggestionState
+    ]
+
+    report: ReportReviewSummary
+
+    evidence: list[dict]
+
+    location_warning: (
+        LocationCheckResponse | None
+    ) = None
 
 
 class ReportCreate(APIModel):
@@ -418,6 +563,12 @@ class ReportCreate(APIModel):
         default_factory=list,
     )
 
+    ai_suggestions: list[
+        AISuggestionState
+    ] = Field(
+        default_factory=list,
+    )
+
     @model_validator(mode="after")
     def validate_report_submission(
         self,
@@ -442,6 +593,22 @@ class ReportCreate(APIModel):
                 "in the future"
             )
 
+        unresolved_suggestions = [
+            suggestion
+            for suggestion
+            in self.ai_suggestions
+            if (
+                suggestion.status
+                == "unresolved"
+            )
+        ]
+
+        if unresolved_suggestions:
+            raise ValueError(
+                "All AI suggestions must be confirmed, "
+                "corrected or removed before submission"
+            )
+
         return self
 
 
@@ -450,10 +617,21 @@ class ThreatCategoryResponse(APIModel):
     code: str
     label: str
 
-    short_explanation: str | None = None
-    useful_evidence: str | None = None
-    safety_reminder: str | None = None
-    icon_reference: str | None = None
+    short_explanation: (
+        str | None
+    ) = None
+
+    useful_evidence: (
+        str | None
+    ) = None
+
+    safety_reminder: (
+        str | None
+    ) = None
+
+    icon_reference: (
+        str | None
+    ) = None
 
 
 class ReportSubmittedResponse(APIModel):
@@ -474,6 +652,7 @@ class ObserverReportSummary(APIModel):
     status_label: str
 
     outcome: str | None = None
+
     submitted_at: datetime
 
 
@@ -488,21 +667,38 @@ class ObserverReportListResponse(APIModel):
 
 
 class ObserverLocationResponse(APIModel):
-    latitude: float | None = None
-    longitude: float | None = None
+    latitude: (
+        float | None
+    ) = None
 
-    uncertainty_metres: int | None = None
+    longitude: (
+        float | None
+    ) = None
 
-    confidence_label: str | None = None
-    source_label: str | None = None
+    uncertainty_metres: (
+        int | None
+    ) = None
 
-    relocation_notes: str | None = None
+    confidence_label: (
+        str | None
+    ) = None
+
+    source_label: (
+        str | None
+    ) = None
+
+    relocation_notes: (
+        str | None
+    ) = None
 
 
 class ObserverClosureSummary(APIModel):
     status: CaseStatus
     closure_label: str
-    public_note: str | None = None
+
+    public_note: (
+        str | None
+    ) = None
 
 
 class ObserverReportDetailResponse(APIModel):
@@ -517,7 +713,10 @@ class ObserverReportDetailResponse(APIModel):
     ) = None
 
     general_location: str
-    dive_site: str | None = None
+
+    dive_site: (
+        str | None
+    ) = None
 
     precise_location: (
         ObserverLocationResponse | None
@@ -526,7 +725,9 @@ class ObserverReportDetailResponse(APIModel):
     status: CaseStatus
     status_label: str
 
-    outcome: str | None = None
+    outcome: (
+        str | None
+    ) = None
 
     information_request_reason: (
         str | None
@@ -575,7 +776,10 @@ class InformationResponseCreate(APIModel):
     def response_text_must_not_be_blank(
         self,
     ):
-        if self.response_text.strip() == "":
+        if (
+            self.response_text.strip()
+            == ""
+        ):
             raise ValueError(
                 "responseText must not be empty"
             )
@@ -591,6 +795,7 @@ class InformationResponseAccepted(APIModel):
 
     report_reference: str
     status: CaseStatus
+
     response_text: str
     responded_at: datetime
 
