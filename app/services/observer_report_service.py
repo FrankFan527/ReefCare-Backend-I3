@@ -1,14 +1,36 @@
+# ---------------------------------------------------------------------------
+# Observer report tracking (US6.1 / US6.2).
+#
+# This service owns the Observer-facing projection and validation rules.
+#
+# The database remains the ownership boundary:
+#   reefcare_my_reports(observer_id)
+#   reefcare_report_timeline(report_reference, observer_id)
+#   reefcare_report_location(report_reference, user_id)
+#
+# This layer deliberately does not expose coordinator identity, internal
+# decision vocabulary or private evidence storage references.
+# ---------------------------------------------------------------------------
+
 from datetime import date
 
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import (
+    SQLAlchemyError,
+)
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+)
 
-from app.core.enums import CaseStatus
+from app.core.enums import (
+    CaseStatus,
+)
 from app.core.exceptions import (
     DatabaseOperationError,
     NotFoundError,
 )
-from app.repositories import report_repository
+from app.repositories import (
+    report_repository,
+)
 from app.repositories.location_repository import (
     get_report_location,
 )
@@ -32,12 +54,9 @@ class ObserverReportValidationError(
     """
 
 
-# These are open, non-terminal statuses produced by a
-# persisted US5.4 response decision.
-#
-# Only the status codes are maintained here.
-# Observer-facing wording continues to come from
-# case_status.observer_label in PostgreSQL.
+# These statuses already communicate an Observer-safe outcome before terminal
+# closure. The text shown to the Observer comes from case_status.observer_label
+# rather than from raw case_decision.response_type.
 OPEN_DECISION_STATUSES: set[str] = {
     CaseStatus.MONITORING.value,
     CaseStatus.REFERRED.value,
@@ -45,26 +64,51 @@ OPEN_DECISION_STATUSES: set[str] = {
 }
 
 
+def observer_needs_attention(
+    current_status,
+) -> bool:
+    """
+    Whether the Observer currently has something to do.
+
+    In the current workflow the only report state that
+    requires Observer action is needs_more_info.
+
+    Other workflow states may be important, but they do not
+    ask the Observer to provide anything.
+    """
+
+    if isinstance(
+        current_status,
+        CaseStatus,
+    ):
+        current_status = (
+            current_status.value
+        )
+
+    return (
+        current_status
+        == CaseStatus.NEEDS_MORE_INFO.value
+    )
+
+
 def get_observer_outcome(
     report,
 ) -> str | None:
     """
-    Return the observer-safe outcome.
+    Return the Observer-safe outcome text.
 
     Priority:
 
     1. A terminal closure label wins when the case is
        closed.
 
-    2. An open case with a recorded US5.4 response uses
-       the current database-owned observer status label as
-       its outcome.
+    2. An open case with an Observer-visible response state
+       uses case_status.observer_label.
 
-    3. Earlier workflow states have no outcome yet.
+    3. Earlier workflow states do not yet have an outcome.
 
-    This deliberately does NOT maintain a Python mapping
-    such as monitoring -> "Monitoring Recommended".
-    case_status.observer_label remains the source of truth.
+    Raw case_decision.response_type is deliberately never
+    returned here.
     """
 
     closure_label = report.get(
@@ -101,13 +145,11 @@ def get_observer_closure_summary(
     report,
 ) -> ObserverClosureSummary | None:
     """
-    Build the observer-facing closure summary.
+    Return terminal closure information in an Observer-safe
+    form.
 
-    Only the closure label and the note attached to the
-    closing event are exposed.
-
-    Internal coordinator decision fields are intentionally
-    absent from the projection.
+    No coordinator identity or internal response decision is
+    returned.
     """
 
     closure_label = report.get(
@@ -118,8 +160,12 @@ def get_observer_closure_summary(
         return None
 
     return ObserverClosureSummary(
-        status=report["status"],
-        closure_label=closure_label,
+        status=report[
+            "status"
+        ],
+        closure_label=(
+            closure_label
+        ),
         public_note=report.get(
             "public_closure_note"
         ),
@@ -131,22 +177,17 @@ def build_observer_report_projection(
     location=None,
 ) -> ObserverReportDetailResponse:
     """
-    Shape an already observer-scoped database row into the
-    public API contract.
+    Build the complete Observer-facing report detail.
 
-    This function deliberately has no fields for:
-    - coordinator identity
-    - internal case-status labels
-    - raw response_type
-    - decision notes
-    - private evidence object keys
+    The Observer may see their own precise location through
+    reefcare_report_location(), but private storage keys and
+    coordinator/case-decision details are not part of this
+    projection.
 
-    An open US5.4 decision is represented only through the
-    canonical observer-safe status/statusLabel/outcome.
-
-    Precise location is included only when returned by
-    reefcare_report_location(reference, observer_id), whose
-    database authorisation rule is authoritative.
+    Iteration 2 extends the detail with:
+    - evidence count
+    - needsAttention
+    - lastUpdatedAt
     """
 
     precise_location = None
@@ -157,22 +198,29 @@ def build_observer_report_projection(
                 latitude=location[
                     "latitude"
                 ],
+
                 longitude=location[
                     "longitude"
                 ],
+
                 uncertainty_metres=(
                     location[
                         "uncertainty_metres"
                     ]
                 ),
+
                 confidence_label=(
                     location[
                         "confidence_label"
                     ]
                 ),
-                source_label=location[
-                    "source_label"
-                ],
+
+                source_label=(
+                    location[
+                        "source_label"
+                    ]
+                ),
+
                 relocation_notes=(
                     location[
                         "relocation_notes"
@@ -181,87 +229,183 @@ def build_observer_report_projection(
             )
         )
 
-    return ObserverReportDetailResponse(
-        report_reference=report[
-            "report_reference"
-        ],
-        threat_category=report[
-            "threat"
-        ],
-        description=report[
-            "description"
-        ],
-        observed_at=report[
-            "observed_at"
-        ],
-        estimated_depth_metres=report[
-            "estimated_depth_metres"
-        ],
-        general_location=report[
-            "area"
-        ],
-        dive_site=report.get(
-            "dive_site_name"
-        ),
-        precise_location=(
-            precise_location
-        ),
-        status=report[
-            "status"
-        ],
-        status_label=report[
-            "status_label"
-        ],
-        outcome=get_observer_outcome(
-            report
-        ),
-        information_request_reason=(
-            report.get(
-                "information_request_reason"
-            )
-        ),
-        closure=(
-            get_observer_closure_summary(
-                report
-            )
-        ),
-        submitted_at=report[
-            "submitted_at"
-        ],
+    return (
+        ObserverReportDetailResponse(
+            report_reference=(
+                report[
+                    "report_reference"
+                ]
+            ),
+
+            threat_category=(
+                report[
+                    "threat"
+                ]
+            ),
+
+            description=(
+                report[
+                    "description"
+                ]
+            ),
+
+            observed_at=(
+                report[
+                    "observed_at"
+                ]
+            ),
+
+            estimated_depth_metres=(
+                report[
+                    "estimated_depth_metres"
+                ]
+            ),
+
+            general_location=(
+                report[
+                    "area"
+                ]
+            ),
+
+            dive_site=(
+                report.get(
+                    "dive_site_name"
+                )
+            ),
+
+            precise_location=(
+                precise_location
+            ),
+
+            evidence_count=int(
+                report.get(
+                    "evidence_count",
+                    0,
+                )
+            ),
+
+            status=(
+                report[
+                    "status"
+                ]
+            ),
+
+            status_label=(
+                report[
+                    "status_label"
+                ]
+            ),
+
+            outcome=(
+                get_observer_outcome(
+                    report
+                )
+            ),
+
+            needs_attention=(
+                observer_needs_attention(
+                    report[
+                        "status"
+                    ]
+                )
+            ),
+
+            information_request_reason=(
+                report.get(
+                    "information_request_reason"
+                )
+            ),
+
+            closure=(
+                get_observer_closure_summary(
+                    report
+                )
+            ),
+
+            submitted_at=(
+                report[
+                    "submitted_at"
+                ]
+            ),
+
+            last_updated_at=(
+                report[
+                    "last_updated_at"
+                ]
+            ),
+        )
     )
 
 
 def build_observer_timeline(
     *,
     report_reference: str,
+    current_status,
+    current_status_label: str,
     rows,
 ) -> ObserverTimelineResponse:
     """
-    Shape deterministic observer-safe timeline rows returned
-    by reefcare_report_timeline().
+    Build the Observer-facing timeline.
 
-    The repository/database function already supplies only
-    case_status.observer_label and event occurrence time.
+    reefcare_report_timeline() already guarantees the
+    timeline contains only Observer-safe labels and
+    timestamps.
 
-    No raw response_type, coordinator identity or decision
-    note is exposed.
+    is_current is added to the final timeline row so the
+    frontend does not need to independently infer the
+    active point.
+
+    currentStatus/currentStatusLabel remain explicit because
+    the latest database state is authoritative even if old
+    data contains an unusual or incomplete event history.
     """
+
+    timeline: list[
+        ObserverTimelineEvent
+    ] = []
+
+    row_count = len(
+        rows
+    )
+
+    for index, row in enumerate(
+        rows
+    ):
+        timeline.append(
+            ObserverTimelineEvent(
+                status_label=(
+                    row[
+                        "status_label"
+                    ]
+                ),
+
+                occurred_at=(
+                    row[
+                        "occurred_at"
+                    ]
+                ),
+
+                is_current=(
+                    index
+                    == row_count - 1
+                ),
+            )
+        )
 
     return ObserverTimelineResponse(
         report_reference=(
             report_reference
         ),
-        timeline=[
-            ObserverTimelineEvent(
-                status_label=row[
-                    "status_label"
-                ],
-                occurred_at=row[
-                    "occurred_at"
-                ],
-            )
-            for row in rows
-        ],
+
+        current_status=(
+            current_status
+        ),
+
+        current_status_label=(
+            current_status_label
+        ),
+
+        timeline=timeline,
     )
 
 
@@ -269,20 +413,29 @@ async def list_observer_reports(
     *,
     db: AsyncSession,
     observer_id: int,
-    status_filter: CaseStatus | None = None,
-    from_date: date | None = None,
-    to_date: date | None = None,
+    status_filter: (
+        CaseStatus | None
+    ) = None,
+    from_date: (
+        date | None
+    ) = None,
+    to_date: (
+        date | None
+    ) = None,
     page: int = 1,
     page_size: int = 20,
 ) -> ObserverReportListResponse:
     """
-    List only the authenticated observer's reports.
+    Return the authenticated Observer's reports.
 
-    Observer isolation starts in PostgreSQL through
-    reefcare_my_reports(observer_id).
+    Ownership filtering occurs inside PostgreSQL before the
+    rows reach this service.
 
-    Filtering and pagination are then applied to that
-    already-scoped result set.
+    Iteration 2 enriches each summary with:
+    - observedAt
+    - diveSite
+    - needsAttention
+    - lastUpdatedAt
     """
 
     if (
@@ -290,65 +443,126 @@ async def list_observer_reports(
         and to_date is not None
         and from_date > to_date
     ):
-        raise (
-            ObserverReportValidationError(
-                "fromDate must be on or "
-                "before toDate"
-            )
+        raise ObserverReportValidationError(
+            "fromDate must be on or "
+            "before toDate"
         )
 
     try:
-        rows, total = (
+        (
+            rows,
+            total,
+        ) = (
             await report_repository
             .list_my_reports(
                 db=db,
-                observer_id=observer_id,
+
+                observer_id=(
+                    observer_id
+                ),
+
                 status_code=(
                     status_filter.value
                     if status_filter
                     else None
                 ),
-                from_date=from_date,
-                to_date=to_date,
+
+                from_date=(
+                    from_date
+                ),
+
+                to_date=(
+                    to_date
+                ),
+
                 page=page,
-                page_size=page_size,
+
+                page_size=(
+                    page_size
+                ),
             )
         )
 
         items = [
             ObserverReportSummary(
-                report_reference=row[
-                    "report_reference"
-                ],
-                threat_category=row[
-                    "threat"
-                ],
-                general_location=row[
-                    "area"
-                ],
-                status=row[
-                    "status"
-                ],
-                status_label=row[
-                    "status_label"
-                ],
+                report_reference=(
+                    row[
+                        "report_reference"
+                    ]
+                ),
+
+                threat_category=(
+                    row[
+                        "threat"
+                    ]
+                ),
+
+                general_location=(
+                    row[
+                        "area"
+                    ]
+                ),
+
+                dive_site=(
+                    row.get(
+                        "dive_site_name"
+                    )
+                ),
+
+                observed_at=(
+                    row[
+                        "observed_at"
+                    ]
+                ),
+
+                status=(
+                    row[
+                        "status"
+                    ]
+                ),
+
+                status_label=(
+                    row[
+                        "status_label"
+                    ]
+                ),
+
                 outcome=(
                     get_observer_outcome(
                         row
                     )
                 ),
-                submitted_at=row[
-                    "submitted_at"
-                ],
+
+                needs_attention=(
+                    observer_needs_attention(
+                        row[
+                            "status"
+                        ]
+                    )
+                ),
+
+                submitted_at=(
+                    row[
+                        "submitted_at"
+                    ]
+                ),
+
+                last_updated_at=(
+                    row[
+                        "last_updated_at"
+                    ]
+                ),
             )
             for row in rows
         ]
 
-        return ObserverReportListResponse(
-            items=items,
-            page=page,
-            page_size=page_size,
-            total=total,
+        return (
+            ObserverReportListResponse(
+                items=items,
+                page=page,
+                page_size=page_size,
+                total=total,
+            )
         )
 
     except SQLAlchemyError as exc:
@@ -366,15 +580,14 @@ async def get_observer_report(
     report_reference: str,
 ) -> ObserverReportDetailResponse:
     """
-    Return one report owned by the authenticated observer.
+    Return one report owned by the authenticated Observer.
 
-    The repository first scopes through
-    reefcare_my_reports(), and precise location is
-    independently authorised through
+    A report that belongs to another Observer is returned as
+    NotFound rather than Forbidden, preventing report
+    reference enumeration.
+
+    Precise location remains independently authorised by
     reefcare_report_location().
-
-    A report belonging to another observer therefore
-    remains indistinguishable from a missing report.
     """
 
     try:
@@ -382,7 +595,11 @@ async def get_observer_report(
             await report_repository
             .get_my_report(
                 db=db,
-                observer_id=observer_id,
+
+                observer_id=(
+                    observer_id
+                ),
+
                 report_reference=(
                     report_reference
                 ),
@@ -397,10 +614,14 @@ async def get_observer_report(
         location = (
             await get_report_location(
                 db=db,
+
                 report_reference=(
                     report_reference
                 ),
-                user_id=observer_id,
+
+                user_id=(
+                    observer_id
+                ),
             )
         )
 
@@ -429,12 +650,19 @@ async def get_observer_report_timeline(
     report_reference: str,
 ) -> ObserverTimelineResponse:
     """
-    Return the observer-safe plain-language status
-    timeline.
+    Return Observer-safe plain-language status history.
 
-    A scoped report lookup is performed first so an empty
-    timeline is not used to infer whether another
-    observer's report exists.
+    The report lookup occurs first.
+
+    This means:
+    - missing report -> 404
+    - another Observer's report -> 404
+
+    The caller therefore cannot enumerate valid report
+    references belonging to other users.
+
+    reefcare_report_timeline() then supplies only safe
+    status labels and timestamps.
     """
 
     try:
@@ -442,7 +670,11 @@ async def get_observer_report_timeline(
             await report_repository
             .get_my_report(
                 db=db,
-                observer_id=observer_id,
+
+                observer_id=(
+                    observer_id
+                ),
+
                 report_reference=(
                     report_reference
                 ),
@@ -458,7 +690,11 @@ async def get_observer_report_timeline(
             await report_repository
             .get_report_timeline(
                 db=db,
-                observer_id=observer_id,
+
+                observer_id=(
+                    observer_id
+                ),
+
                 report_reference=(
                     report_reference
                 ),
@@ -469,6 +705,19 @@ async def get_observer_report_timeline(
             report_reference=(
                 report_reference
             ),
+
+            current_status=(
+                report[
+                    "status"
+                ]
+            ),
+
+            current_status_label=(
+                report[
+                    "status_label"
+                ]
+            ),
+
             rows=rows,
         )
 
