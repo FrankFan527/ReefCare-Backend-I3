@@ -150,6 +150,133 @@ class ObservationLocationInput(APIModel):
         return self
 
 
+class ReportCompletenessLocationInput(
+    APIModel
+):
+    """
+    Relaxed location representation used only for the
+    completeness checker.
+
+    Fields are optional because the purpose of this
+    endpoint is to identify an incomplete draft rather
+    than reject it before evaluation.
+    """
+
+    named_dive_site_id: (
+        int | None
+    ) = Field(
+        default=None,
+        gt=0,
+    )
+
+    location_confidence: (
+        str | None
+    ) = Field(
+        default=None,
+        max_length=50,
+    )
+
+    location_source: (
+        LocationSource | None
+    ) = None
+
+    map_pin: (
+        MapPinInput | None
+    ) = None
+
+    coordinates: (
+        MapPinInput | None
+    ) = None
+
+    relocation_notes: (
+        str | None
+    ) = Field(
+        default=None,
+        max_length=1000,
+    )
+
+
+class ReportCompletenessRequest(
+    APIModel
+):
+    """
+    Permissive representation of an unfinished report.
+
+    Unlike ReportCreate, required fields are optional here
+    because this endpoint must be able to report which
+    fields are still missing.
+    """
+
+    threat_category_id: (
+        int | None
+    ) = Field(
+        default=None,
+        gt=0,
+    )
+
+    observed_at: (
+        datetime | None
+    ) = None
+
+    estimated_depth_metres: (
+        float | None
+    ) = Field(
+        default=None,
+        ge=0,
+    )
+
+    description: (
+        str | None
+    ) = Field(
+        default=None,
+        max_length=4000,
+    )
+
+    dive_session_id: (
+        int | None
+    ) = Field(
+        default=None,
+        gt=0,
+    )
+
+    location: (
+        ReportCompletenessLocationInput
+        | None
+    ) = None
+
+    evidence_count: int = Field(
+        default=0,
+        ge=0,
+    )
+
+
+class ReportCompletenessResponse(
+    APIModel
+):
+    """
+    Deterministic readiness result for a report draft.
+
+    blocking_missing:
+        required information that has not been supplied
+
+    blocking_issues:
+        information that was supplied but is invalid or
+        inconsistent
+
+    recommended_missing:
+        useful information that does not block submission
+    """
+
+    is_submittable: bool
+
+    blocking_missing: list[str]
+    blocking_issues: list[str]
+
+    recommended_missing: list[str]
+
+    summary: str
+
+
 class ReportCreate(APIModel):
     threat_category_id: int = Field(
         gt=0,
