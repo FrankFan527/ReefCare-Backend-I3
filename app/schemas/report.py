@@ -166,3 +166,67 @@ class ObserverTimelineEvent(APIModel):
 class ObserverTimelineResponse(APIModel):
     report_reference: str
     timeline: list[ObserverTimelineEvent]
+
+
+
+
+class OpenInformationRequest(APIModel):
+    """
+    The request an observer still has to answer.
+
+    Carries the timestamp as well as the text. US6.3 AC5 asks for the relevant
+    timestamp and acting user on every interaction, and the observer half of
+    that is being able to see when they were asked.
+
+    requested_by is deliberately absent. The observer has no need for the
+    coordinator's user id, and the existing observer projections are careful
+    never to expose coordinator identity.
+    """
+
+    request_text: str
+    requested_at: datetime
+
+
+class InformationResponseCreate(APIModel):
+    """
+    An observer's answer to an open information request.
+
+    US6.3 AC2 allows text or optional evidence. This is the text path; photo
+    attachment is a separate change, and evidence.case_event_id already exists
+    in the database to carry it.
+    """
+
+    response_text: str = Field(
+        min_length=1,
+        max_length=2000,
+    )
+
+    @model_validator(mode="after")
+    def response_text_must_not_be_blank(self):
+        """
+        min_length alone accepts a string of spaces, which would record an
+        empty answer as though the observer had responded and hand the
+        coordinator nothing to re-review.
+        """
+
+        if self.response_text.strip() == "":
+            raise ValueError("responseText must not be empty")
+
+        return self
+
+
+class InformationResponseAccepted(APIModel):
+    """
+    Confirmation that the answer reached the existing case.
+
+    coordinator_retained is returned rather than assumed. US6.3 AC3 requires
+    the same report and the same coordinator to survive the response, and
+    returning the owner is how the frontend, and a test, can see that it did.
+    """
+
+    report_reference: str
+    status: CaseStatus
+    response_text: str
+    responded_at: datetime
+
+    coordinator_retained: int | None = None
