@@ -106,6 +106,12 @@ async def get_case(
 
                 tc.label AS threat,
 
+                -- US5.2 AC3: the code drives the same
+                -- triage rules the queue uses, so a case
+                -- never shows one priority in the list and
+                -- a different one when opened
+                tc.code AS threat_code,
+
                 r.description,
                 r.observed_at,
                 r.estimated_depth_metres,
@@ -116,6 +122,35 @@ async def get_case(
                 cs.internal_label AS status_label,
 
                 r.submitted_at,
+
+                CAST(
+                    FLOOR(
+                        EXTRACT(
+                            EPOCH FROM (
+                                CURRENT_TIMESTAMP
+                                - r.submitted_at
+                            )
+                        ) / 3600
+                    )
+                    AS INTEGER
+                ) AS hours_in_queue,
+
+                COALESCE(ev.evidence_count, 0)
+                    AS evidence_count,
+
+                (
+                    rl.report_location_id IS NOT NULL
+                    AND (
+                        rl.latitude IS NOT NULL
+                        OR COALESCE(
+                            BTRIM(rl.relocation_notes),
+                            ''
+                        ) <> ''
+                    )
+                ) AS has_location_detail,
+
+                LENGTH(BTRIM(r.description))
+                    AS description_length,
 
                 r.claimed_by_user_id,
                 r.claimed_at,
@@ -143,6 +178,16 @@ async def get_case(
             LEFT JOIN app_user u
                 ON u.user_id =
                    r.claimed_by_user_id
+
+            LEFT JOIN report_location rl
+                ON rl.report_location_id =
+                   r.report_location_id
+
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS evidence_count
+                FROM evidence e
+                WHERE e.report_id = r.report_id
+            ) ev ON TRUE
 
             WHERE
                 r.report_reference =
