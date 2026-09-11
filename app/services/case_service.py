@@ -21,6 +21,9 @@ from app.repositories.evidence_repository import (
 from app.repositories.location_repository import (
     get_report_location,
 )
+from app.services.information_service import (
+    get_information_exchange,
+)
 from app.services.projection_service import (
     build_coordinator_case_projection,
 )
@@ -102,13 +105,28 @@ async def get_coordinator_case(
         )
     )
 
+    # US6.3 AC4. Ownership was already established by
+    # get_owned_case() above, so the exchange is fetched
+    # without repeating the check.
+    information_exchange = (
+        await get_information_exchange(
+            db=db,
+            report_reference=report_reference,
+        )
+    )
+
+    # US5.2 AC2. ai_assisted stays None until US5.6 builds
+    # the Conservation Triage Brief. The argument is passed
+    # explicitly rather than left to the default so the
+    # place it will eventually be filled is obvious.
     return build_coordinator_case_projection(
         case=case,
         location=location,
         evidence_rows=evidence_rows,
         latest_decision=latest_decision,
+        information_exchange=information_exchange,
+        ai_assisted=None,
     )
-
 
 async def set_case_under_review(
     db: AsyncSession,

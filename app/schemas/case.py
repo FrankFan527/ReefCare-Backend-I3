@@ -144,6 +144,69 @@ class LatestDecisionResponse(APIModel):
     decided_at: datetime
 
 
+class CaseTriageContext(APIModel):
+    """
+    US5.2 AC3: why this case sits where it does in the queue.
+
+    The same values the queue shows, produced by the same rules in
+    triage_priority_service. Recomputing them here rather than carrying them
+    over from the queue item is what keeps the two views from disagreeing: a
+    case cannot show one priority in the list and a different one when opened.
+
+    All computed on read. Nothing here is persisted.
+    """
+
+    evidence_completeness: EvidenceCompleteness
+    evidence_count: int
+
+    priority: CasePriority
+    priority_reasons: list[str]
+
+    hours_in_queue: int
+
+
+class AIAssistedContext(APIModel):
+    """
+    US5.2 AC2: AI output, kept structurally apart from everything else.
+
+    The separation is the point. Observer-confirmed information sits in the
+    report fields, Coordinator-confirmed findings sit in latestDecision, and
+    anything a model produced lives only in here. A coordinator reading the
+    response can tell which is which without knowing how any of it was
+    generated, and nothing in this block is presented as verification.
+
+    Null throughout Iteration 2 until US5.6 is built. The contract exists now
+    so the AI work can fill it without renegotiating the response shape, and so
+    the frontend can build the separated display before the model arrives.
+    """
+
+    triage_brief: str | None = None
+    generated_at: datetime | None = None
+
+    # Always present and always true while this block is non-null. A flag the
+    # frontend has to read is harder to forget than a convention it has to
+    # remember.
+    is_unverified_ai_output: bool = True
+
+
+class InformationExchangeEntry(APIModel):
+    """
+    One turn in the US5.3 / US6.3 information loop.
+
+    Requests and responses are returned in one ordered list rather than two,
+    because what the coordinator needs to re-review is the conversation: the
+    answer means little without the question directly above it.
+    """
+
+    event_type: str
+    message: str | None = None
+
+    occurred_at: datetime
+
+    actor_user_id: int | None = None
+    actor_display_name: str | None = None
+
+
 class CoordinatorCaseResponse(APIModel):
     report_reference: str
 
@@ -177,6 +240,18 @@ class CoordinatorCaseResponse(APIModel):
     latest_decision: (
         LatestDecisionResponse | None
     ) = None
+
+    # US5.2 AC3. Always present: every case has an age and a
+    # completeness, even if the answer is "nothing yet".
+    triage_context: CaseTriageContext
+
+    # US5.2 AC2. Null until US5.6 exists. Kept as its own
+    # block so AI output can never be mistaken for an
+    # Observer statement or a Coordinator finding.
+    ai_assisted: AIAssistedContext | None = None
+
+    # US6.3 AC4. Empty list when nothing has been asked.
+    information_exchange: list[InformationExchangeEntry] = []
 
 
 class InformationRequestCreate(APIModel):
