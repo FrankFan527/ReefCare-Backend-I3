@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.routes import (
+    admin,
     auth,
     case_actions,
     coordinator,
@@ -19,6 +20,12 @@ api_router.include_router(
     auth.router,
     prefix="/auth",
     tags=["Authentication"],
+)
+
+api_router.include_router(
+    admin.router,
+    prefix="/admin",
+    tags=["Administration"],
 )
 
 api_router.include_router(
