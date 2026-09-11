@@ -1,9 +1,19 @@
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 
-from pydantic import Field, model_validator
+from pydantic import (
+    Field,
+    model_validator,
+)
 
-from app.core.enums import CaseStatus
+from app.core.enums import (
+    CaseStatus,
+    LocationSource,
+)
 from app.schemas.common import APIModel
+
 
 class MapPinInput(APIModel):
     latitude: float = Field(
@@ -16,9 +26,31 @@ class MapPinInput(APIModel):
         le=180,
     )
 
+
 class ObservationLocationInput(APIModel):
+    """
+    Observation location and provenance.
+
+    named_dive_site_id remains required because the named
+    site is the report's general/public-safe location.
+
+    location_source records how any more precise location
+    information was obtained.
+
+    Backward compatibility:
+    - no locationSource + mapPin -> manual_map_pin
+    - no locationSource + no mapPin -> named_dive_site
+
+    I2 explicit sources:
+    - named_dive_site
+    - manual_map_pin
+    - entered_coordinates
+    - device_metadata
+    - unknown
+    """
+
     named_dive_site_id: int = Field(
-        gt=0
+        gt=0,
     )
 
     location_confidence: str = Field(
@@ -26,21 +58,108 @@ class ObservationLocationInput(APIModel):
         max_length=50,
     )
 
+    location_source: (
+        LocationSource | None
+    ) = None
+
+    # Existing I1 field. Retained for compatibility.
     map_pin: MapPinInput | None = None
+
+    # Used for manually entered coordinates or coordinates
+    # obtained from device/photo metadata.
+    coordinates: MapPinInput | None = None
 
     relocation_notes: str | None = Field(
         default=None,
         max_length=1000,
     )
 
+    @model_validator(mode="after")
+    def validate_location_source_shape(
+        self,
+    ):
+        """
+        Validate which coordinate representation may
+        accompany each provenance source.
+
+        Final location/confidence validation remains in
+        location_service.py.
+        """
+
+        source = self.location_source
+
+        # I1 compatibility.
+        if source is None:
+            if self.map_pin is not None:
+                source = (
+                    LocationSource
+                    .MANUAL_MAP_PIN
+                )
+            else:
+                source = (
+                    LocationSource
+                    .NAMED_DIVE_SITE
+                )
+
+        if (
+            source
+            == LocationSource.MANUAL_MAP_PIN
+        ):
+            if self.map_pin is None:
+                raise ValueError(
+                    "mapPin is required when "
+                    "locationSource is "
+                    "manual_map_pin"
+                )
+
+            if self.coordinates is not None:
+                raise ValueError(
+                    "coordinates must not be supplied "
+                    "with manual_map_pin; use mapPin"
+                )
+
+        elif source in {
+            LocationSource.ENTERED_COORDINATES,
+            LocationSource.DEVICE_METADATA,
+        }:
+            if self.coordinates is None:
+                raise ValueError(
+                    "coordinates are required when "
+                    f"locationSource is {source.value}"
+                )
+
+            if self.map_pin is not None:
+                raise ValueError(
+                    "mapPin must not be supplied for "
+                    f"{source.value}"
+                )
+
+        elif source in {
+            LocationSource.NAMED_DIVE_SITE,
+            LocationSource.UNKNOWN,
+        }:
+            if (
+                self.map_pin is not None
+                or self.coordinates is not None
+            ):
+                raise ValueError(
+                    f"{source.value} must not include "
+                    "report-specific coordinates"
+                )
+
+        return self
+
+
 class ReportCreate(APIModel):
     threat_category_id: int = Field(
-        gt=0
+        gt=0,
     )
 
     observed_at: datetime
 
-    estimated_depth_metres: float | None = Field(
+    estimated_depth_metres: (
+        float | None
+    ) = Field(
         default=None,
         ge=0,
     )
@@ -51,13 +170,15 @@ class ReportCreate(APIModel):
     )
 
     dive_session_id: int = Field(
-        gt=0
+        gt=0,
     )
 
     location: ObservationLocationInput
 
     @model_validator(mode="after")
-    def validate_report_submission(self):
+    def validate_report_submission(
+        self,
+    ):
         if not self.description.strip():
             raise ValueError(
                 "Description must not be empty"
@@ -74,10 +195,12 @@ class ReportCreate(APIModel):
             timezone.utc
         ):
             raise ValueError(
-                "Observation time cannot be in the future"
+                "Observation time cannot be "
+                "in the future"
             )
 
         return self
+
 
 class ThreatCategoryResponse(APIModel):
     threat_category_id: int
@@ -112,7 +235,9 @@ class ObserverReportSummary(APIModel):
 
 
 class ObserverReportListResponse(APIModel):
-    items: list[ObserverReportSummary]
+    items: list[
+        ObserverReportSummary
+    ]
 
     page: int
     page_size: int
@@ -124,6 +249,7 @@ class ObserverLocationResponse(APIModel):
     longitude: float | None = None
 
     uncertainty_metres: int | None = None
+
     confidence_label: str | None = None
     source_label: str | None = None
 
@@ -142,18 +268,30 @@ class ObserverReportDetailResponse(APIModel):
 
     description: str
     observed_at: datetime
-    estimated_depth_metres: float | None = None
+
+    estimated_depth_metres: (
+        float | None
+    ) = None
 
     general_location: str
     dive_site: str | None = None
-    precise_location: ObserverLocationResponse | None = None
+
+    precise_location: (
+        ObserverLocationResponse | None
+    ) = None
 
     status: CaseStatus
     status_label: str
+
     outcome: str | None = None
 
-    information_request_reason: str | None = None
-    closure: ObserverClosureSummary | None = None
+    information_request_reason: (
+        str | None
+    ) = None
+
+    closure: (
+        ObserverClosureSummary | None
+    ) = None
 
     submitted_at: datetime
 
@@ -165,22 +303,15 @@ class ObserverTimelineEvent(APIModel):
 
 class ObserverTimelineResponse(APIModel):
     report_reference: str
-    timeline: list[ObserverTimelineEvent]
 
-
+    timeline: list[
+        ObserverTimelineEvent
+    ]
 
 
 class OpenInformationRequest(APIModel):
     """
     The request an observer still has to answer.
-
-    Carries the timestamp as well as the text. US6.3 AC5 asks for the relevant
-    timestamp and acting user on every interaction, and the observer half of
-    that is being able to see when they were asked.
-
-    requested_by is deliberately absent. The observer has no need for the
-    coordinator's user id, and the existing observer projections are careful
-    never to expose coordinator identity.
     """
 
     request_text: str
@@ -190,10 +321,6 @@ class OpenInformationRequest(APIModel):
 class InformationResponseCreate(APIModel):
     """
     An observer's answer to an open information request.
-
-    US6.3 AC2 allows text or optional evidence. This is the text path; photo
-    attachment is a separate change, and evidence.case_event_id already exists
-    in the database to carry it.
     """
 
     response_text: str = Field(
@@ -202,26 +329,21 @@ class InformationResponseCreate(APIModel):
     )
 
     @model_validator(mode="after")
-    def response_text_must_not_be_blank(self):
-        """
-        min_length alone accepts a string of spaces, which would record an
-        empty answer as though the observer had responded and hand the
-        coordinator nothing to re-review.
-        """
-
+    def response_text_must_not_be_blank(
+        self,
+    ):
         if self.response_text.strip() == "":
-            raise ValueError("responseText must not be empty")
+            raise ValueError(
+                "responseText must not be empty"
+            )
 
         return self
 
 
 class InformationResponseAccepted(APIModel):
     """
-    Confirmation that the answer reached the existing case.
-
-    coordinator_retained is returned rather than assumed. US6.3 AC3 requires
-    the same report and the same coordinator to survive the response, and
-    returning the owner is how the frontend, and a test, can see that it did.
+    Confirmation that the answer reached the existing
+    case.
     """
 
     report_reference: str
@@ -229,4 +351,6 @@ class InformationResponseAccepted(APIModel):
     response_text: str
     responded_at: datetime
 
-    coordinator_retained: int | None = None
+    coordinator_retained: (
+        int | None
+    ) = None

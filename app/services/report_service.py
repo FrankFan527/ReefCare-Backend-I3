@@ -1,8 +1,12 @@
 from typing import Any
 
 from fastapi import UploadFile
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import (
+    SQLAlchemyError,
+)
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+)
 
 from app.core.exceptions import (
     DatabaseOperationError,
@@ -11,7 +15,9 @@ from app.repositories import (
     reference_repository,
     report_repository,
 )
-from app.schemas.report import ReportCreate
+from app.schemas.report import (
+    ReportCreate,
+)
 from app.services.evidence_service import (
     EvidenceStorageError,
     EvidenceValidationError,
@@ -21,77 +27,102 @@ from app.services.evidence_service import (
     store_private_evidence,
     validate_photo,
 )
+from app.services.location_service import (
+    LocationValidationError,
+    normalise_observation_location,
+)
 
 
-class ReportValidationError(ValueError):
+class ReportValidationError(
+    ValueError
+):
     """
-    Raised when report input is valid JSON/Pydantic data
+    Raised when report input passes Pydantic validation
     but violates an application/reference-data rule.
     """
 
 
-def _derive_location_values(
+def _normalise_location(
     report_data: ReportCreate,
-) -> tuple[
-    str,
-    float | None,
-    float | None,
-]:
+) -> dict:
     """
-    Determine the canonical location_source.code and coordinates.
+    Convert ReportCreate.location into the canonical
+    PostgreSQL location values.
 
-    Iteration 1 behaviour:
-
-    map pin supplied:
-        manual_map_pin
-        latitude/longitude supplied
-
-    no map pin:
-        named_dive_site
-        no report-specific coordinates
-
-    PostgreSQL performs the final validation again.
+    LocationValidationError is translated into the
+    report-level validation error already handled by the
+    reports route.
     """
 
-    map_pin = (
-        report_data.location.map_pin
-    )
+    location = report_data.location
 
-    if map_pin is None:
-        return (
-            "named_dive_site",
-            None,
-            None,
+    map_pin = location.map_pin
+    coordinates = location.coordinates
+
+    try:
+        return normalise_observation_location(
+            named_dive_site_id=(
+                location.named_dive_site_id
+            ),
+
+            submitted_source=(
+                location.location_source
+            ),
+
+            submitted_confidence_code=(
+                location.location_confidence
+            ),
+
+            map_pin_latitude=(
+                map_pin.latitude
+                if map_pin is not None
+                else None
+            ),
+
+            map_pin_longitude=(
+                map_pin.longitude
+                if map_pin is not None
+                else None
+            ),
+
+            coordinate_latitude=(
+                coordinates.latitude
+                if coordinates is not None
+                else None
+            ),
+
+            coordinate_longitude=(
+                coordinates.longitude
+                if coordinates is not None
+                else None
+            ),
+
+            relocation_notes=(
+                location.relocation_notes
+            ),
         )
 
-    return (
-        "manual_map_pin",
-        map_pin.latitude,
-        map_pin.longitude,
-    )
+    except LocationValidationError as exc:
+        raise ReportValidationError(
+            str(exc)
+        ) from exc
 
 
 async def _validate_reference_data(
     *,
     db: AsyncSession,
     report_data: ReportCreate,
+    normalised_location: dict,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
-    str,
 ]:
     """
-    Resolve API input to canonical PostgreSQL reference codes.
+    Resolve API values against PostgreSQL reference data.
 
-    Returns:
-        (
-            threat_category,
-            location_confidence,
-            location_source_code,
-        )
-
-    Raises:
-        ReportValidationError
+    Location source is already normalised into one of the
+    five canonical TC-407 values and is then checked
+    against location_source.
     """
 
     threat_category = (
@@ -116,9 +147,9 @@ async def _validate_reference_data(
         .get_location_confidence(
             db=db,
             code=(
-                report_data
-                .location
-                .location_confidence
+                normalised_location[
+                    "location_confidence_code"
+                ]
             ),
         )
     )
@@ -128,25 +159,19 @@ async def _validate_reference_data(
             "Unknown location confidence"
         )
 
-    (
-        location_source_code,
-        _,
-        _,
-    ) = _derive_location_values(
-        report_data
-    )
-
     location_source = (
         await reference_repository
         .get_location_source(
             db=db,
-            code=location_source_code,
+            code=(
+                normalised_location[
+                    "location_source_code"
+                ]
+            ),
         )
     )
 
     if location_source is None:
-        # This should normally indicate bad/missing
-        # reference seed data rather than user input.
         raise ReportValidationError(
             "Configured location source "
             "is not available"
@@ -155,7 +180,6 @@ async def _validate_reference_data(
     return (
         dict(threat_category),
         dict(location_confidence),
-        location_source_code,
     )
 
 
@@ -167,14 +191,6 @@ async def _store_evidence_files(
 ]:
     """
     Validate and privately store every uploaded photo.
-
-    Returns both:
-    - stored objects, used for rollback cleanup
-    - JSONB-compatible metadata for PostgreSQL
-
-    Raises:
-        EvidenceValidationError
-        EvidenceStorageError
     """
 
     if not photos:
@@ -239,29 +255,16 @@ async def submit_report(
     photos: list[UploadFile],
 ) -> dict[str, Any]:
     """
-    Submit a complete Iteration 1 observation report.
+    Submit a complete observation report.
 
-    Application responsibilities:
-    1. Require at least one valid photo.
-    2. Resolve canonical threat-category code.
-    3. Resolve canonical location-confidence code.
-    4. Derive location-source code.
-    5. Store evidence privately.
-    6. Construct the evidence JSONB payload.
-    7. Call report_repository.submit_report().
-    8. Read the resulting confirmation.
-    9. Commit the request transaction.
-    10. Remove stored evidence if submission fails.
+    TC-407:
+    all five location provenance codes are now preserved
+    distinctly from request validation through PostgreSQL
+    persistence.
 
-    PostgreSQL responsibilities:
-    - validate the final submission
-    - create report_location
-    - create report
-    - create evidence rows
-    - generate report_reference
-    - set Received status
-    - create submitted event
-    - create automatic intake/status event
+    PostgreSQL remains authoritative for final submission,
+    report creation, location creation, evidence rows and
+    workflow events.
     """
 
     if observer_id <= 0:
@@ -280,58 +283,61 @@ async def submit_report(
     ] = []
 
     try:
-        # Resolve canonical DB reference values before storing files.
-        # This avoids unnecessary file writes for obviously invalid requests.
+        # Normalise before any evidence is stored.
+        normalised_location = (
+            _normalise_location(
+                report_data
+            )
+        )
 
         (
             threat_category,
             location_confidence,
-            location_source_code,
         ) = await _validate_reference_data(
             db=db,
             report_data=report_data,
+            normalised_location=(
+                normalised_location
+            ),
         )
 
-        (
-            _,
-            latitude,
-            longitude,
-        ) = _derive_location_values(
-            report_data
-        )
-
-        dive_session = await report_repository.get_owned_dive_session(
-            db,
-            dive_session_id=report_data.dive_session_id,
-            observer_id=observer_id,
+        dive_session = (
+            await report_repository
+            .get_owned_dive_session(
+                db,
+                dive_session_id=(
+                    report_data
+                    .dive_session_id
+                ),
+                observer_id=observer_id,
+            )
         )
 
         if dive_session is None:
             raise ReportValidationError(
-                "Dive session does not belong to the current observer"
+                "Dive session does not belong "
+                "to the current observer"
             )
 
         if (
-            report_data.location.named_dive_site_id
-            is not None
-            and report_data.location.named_dive_site_id
-            != dive_session["dive_site_id"]
+            report_data
+            .location
+            .named_dive_site_id
+            != dive_session[
+                "dive_site_id"
+            ]
         ):
             raise ReportValidationError(
-                "Dive site does not match the selected dive session"
+                "Dive site does not match "
+                "the selected dive session"
             )
 
-        # Validate and privately store evidence.
         (
             stored_files,
             evidence_items,
         ) = await _store_evidence_files(
             photos
         )
-
-        # Atomic database submission.
-        # The repository calls reefcare_submit_report(...).
-        # It must NOT commit internally.
 
         report_reference = (
             await report_repository
@@ -358,7 +364,9 @@ async def submit_report(
                 ),
 
                 location_source_code=(
-                    location_source_code
+                    normalised_location[
+                        "location_source_code"
+                    ]
                 ),
 
                 location_confidence_code=(
@@ -374,18 +382,25 @@ async def submit_report(
                     .estimated_depth_metres
                 ),
 
-                latitude=latitude,
-                longitude=longitude,
+                latitude=(
+                    normalised_location[
+                        "latitude"
+                    ]
+                ),
+
+                longitude=(
+                    normalised_location[
+                        "longitude"
+                    ]
+                ),
 
                 relocation_notes=(
-                    report_data.location
-                    .relocation_notes
+                    normalised_location[
+                        "relocation_notes"
+                    ]
                 ),
             )
         )
-
-        # Obtain the response data while still inside the same DB
-        # transaction. The session can see its own uncommitted writes.
 
         confirmation = (
             await report_repository
@@ -404,31 +419,26 @@ async def submit_report(
                 "not be reloaded"
             )
 
-        # Build the response BEFORE commit.
-        # This prevents response-construction errors from occurring after
-        # a successful commit.
         response = {
-            "report_reference": (
+            "report_reference":
                 confirmation[
                     "report_reference"
-                ]
-            ),
-            "status": (
-                confirmation["status"]
-            ),
-            "submitted_at": (
+                ],
+
+            "status":
+                confirmation["status"],
+
+            "submitted_at":
                 confirmation[
                     "submitted_at"
-                ]
-            ),
-            "general_location": (
+                ],
+
+            "general_location":
                 confirmation[
                     "general_location"
-                ]
-            ),
+                ],
         }
 
-        # Commit only after the complete workflow succeeded.
         await db.commit()
 
         return response
@@ -457,9 +467,10 @@ async def submit_report(
 
     except SQLAlchemyError as exc:
         await db.rollback()
-        await cleanup_private_evidence(stored_files)
 
-        # print("SQL ERROR:", repr(exc))
+        await cleanup_private_evidence(
+            stored_files
+        )
 
         raise DatabaseOperationError(
             "Unable to submit report"
@@ -467,10 +478,12 @@ async def submit_report(
 
     except Exception as exc:
         await db.rollback()
-        await cleanup_private_evidence(stored_files)
 
-        # print("UNEXPECTED ERROR:", repr(exc))
+        await cleanup_private_evidence(
+            stored_files
+        )
 
         raise DatabaseOperationError(
-            "Unexpected error while submitting report"
+            "Unexpected error while "
+            "submitting report"
         ) from exc
