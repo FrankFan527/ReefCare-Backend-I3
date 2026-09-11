@@ -1,54 +1,83 @@
 # ---------------------------------------------------------------------------
-# Observation location handling (US4.1).
+# Observation location handling (TC-407 / US4).
 #
-# IMPORTANT FOR CALLERS: nothing here touches the database. reefcare_submit_report()
-# performs the INSERT INTO report_location itself, so this module only computes
-# the values passed into that function. Pure functions, no session, no SQL.
+# PostgreSQL already owns five canonical location_source
+# codes:
 #
-# Returned keys map directly onto the function's parameters:
-#   location_source_code     -> p_location_source_code
-#   location_confidence_code -> p_location_confidence_code
-#   latitude / longitude     -> p_latitude / p_longitude
-#   relocation_notes         -> p_relocation_notes
+#   named_dive_site
+#   manual_map_pin
+#   entered_coordinates
+#   device_metadata
+#   unknown
+#
+# This service normalises API input into those exact codes.
+#
+# No database access occurs here.
 # ---------------------------------------------------------------------------
+
 from decimal import Decimal
 
+from app.core.enums import (
+    LocationSource,
+)
 
-# the codes seeded in 02_seed_reference.sql
-LOCATION_SOURCE_NAMED_DIVE_SITE: str = "named_dive_site"
-LOCATION_SOURCE_MANUAL_MAP_PIN: str = "manual_map_pin"
 
-# the confidence recorded when a report has no pin of its own
-DIVE_SITE_ONLY_CONFIDENCE: str = "dive_site_only"
+DIVE_SITE_ONLY_CONFIDENCE = (
+    "dive_site_only"
+)
 
-# the confidence assumed when a pin was dropped but no accuracy was stated
-UNSURE_CONFIDENCE: str = "unsure"
+UNSURE_CONFIDENCE = "unsure"
 
-# Every code except dive_site_only describes a radius around a point:
-# exact is 25 m, within_100m is 100 m, within_1km is 1 km, unsure is 2 km.
-# Without coordinates there is no point for that radius to surround, so these
-# are only meaningful alongside a map pin.
-CONFIDENCE_CODES_REQUIRING_A_PIN: set[str] = {
+
+COORDINATE_LOCATION_SOURCES: set[
+    LocationSource
+] = {
+    LocationSource.MANUAL_MAP_PIN,
+    LocationSource.ENTERED_COORDINATES,
+    LocationSource.DEVICE_METADATA,
+}
+
+
+NON_COORDINATE_LOCATION_SOURCES: set[
+    LocationSource
+] = {
+    LocationSource.NAMED_DIVE_SITE,
+    LocationSource.UNKNOWN,
+}
+
+
+CONFIDENCE_CODES_REQUIRING_COORDINATES: (
+    set[str]
+) = {
     "exact",
     "within_100m",
     "within_1km",
     UNSURE_CONFIDENCE,
 }
 
-# dive_site_only carries no uncertainty of its own; it resolves to whichever
-# default_uncertainty_metres the chosen site has. It is the only honest answer
-# when the observer did not drop a pin, and it contradicts one that they did.
-CONFIDENCE_CODES_WITHOUT_A_PIN: set[str] = {
+
+CONFIDENCE_CODES_WITHOUT_COORDINATES: (
+    set[str]
+) = {
     DIVE_SITE_ONLY_CONFIDENCE,
 }
 
-VALID_LOCATION_CONFIDENCE_CODES: set[str] = (
-    CONFIDENCE_CODES_REQUIRING_A_PIN | CONFIDENCE_CODES_WITHOUT_A_PIN
+
+VALID_LOCATION_CONFIDENCE_CODES: set[
+    str
+] = (
+    CONFIDENCE_CODES_REQUIRING_COORDINATES
+    | CONFIDENCE_CODES_WITHOUT_COORDINATES
 )
 
 
-class LocationValidationError(ValueError):
-    """Raised when a submitted location cannot be stored as given."""
+class LocationValidationError(
+    ValueError
+):
+    """
+    Raised when submitted location provenance,
+    coordinates or confidence are inconsistent.
+    """
 
 
 def validate_coordinates(
@@ -56,136 +85,335 @@ def validate_coordinates(
     longitude: float | Decimal | None,
 ) -> None:
     """
-    Reject malformed or impossible map pin values.
+    Validate a coordinate pair.
 
-    Latitude and longitude must arrive together. A lone coordinate is not a
-    location, and report_location_coords_paired rejects it at the database
-    level, so catching it here gives the observer a readable message instead.
+    Latitude and longitude must either both exist or both
+    be absent.
     """
 
-    if latitude is None and longitude is None:
+    if (
+        latitude is None
+        and longitude is None
+    ):
         return
 
-    if latitude is None or longitude is None:
+    if (
+        latitude is None
+        or longitude is None
+    ):
         raise LocationValidationError(
-            "latitude and longitude must be provided together"
+            "latitude and longitude must be "
+            "provided together"
         )
 
     if not -90 <= float(latitude) <= 90:
         raise LocationValidationError(
-            "latitude must be between -90 and 90"
+            "latitude must be between "
+            "-90 and 90"
         )
 
     if not -180 <= float(longitude) <= 180:
         raise LocationValidationError(
-            "longitude must be between -180 and 180"
+            "longitude must be between "
+            "-180 and 180"
         )
+
+
+def resolve_location_source(
+    *,
+    submitted_source: (
+        LocationSource | None
+    ),
+    has_map_pin: bool,
+    has_coordinates: bool,
+) -> LocationSource:
+    """
+    Resolve the canonical source while preserving I1
+    compatibility.
+
+    Legacy requests:
+        mapPin present -> manual_map_pin
+        no mapPin      -> named_dive_site
+
+    I2 requests should send locationSource explicitly.
+    """
+
+    if submitted_source is not None:
+        return submitted_source
+
+    if has_map_pin:
+        return (
+            LocationSource
+            .MANUAL_MAP_PIN
+        )
+
+    if has_coordinates:
+        raise LocationValidationError(
+            "locationSource is required when "
+            "coordinates are supplied"
+        )
+
+    return (
+        LocationSource.NAMED_DIVE_SITE
+    )
+
+
+def validate_location_source_shape(
+    *,
+    source: LocationSource,
+    has_map_pin: bool,
+    has_coordinates: bool,
+) -> None:
+    """
+    Ensure the coordinate representation matches the
+    declared provenance.
+    """
+
+    if (
+        source
+        == LocationSource.MANUAL_MAP_PIN
+    ):
+        if not has_map_pin:
+            raise LocationValidationError(
+                "manual_map_pin requires mapPin"
+            )
+
+        if has_coordinates:
+            raise LocationValidationError(
+                "manual_map_pin must not also "
+                "supply coordinates"
+            )
+
+        return
+
+    if source in {
+        LocationSource.ENTERED_COORDINATES,
+        LocationSource.DEVICE_METADATA,
+    }:
+        if not has_coordinates:
+            raise LocationValidationError(
+                f"{source.value} requires coordinates"
+            )
+
+        if has_map_pin:
+            raise LocationValidationError(
+                f"{source.value} must not also "
+                "supply mapPin"
+            )
+
+        return
+
+    if source in {
+        LocationSource.NAMED_DIVE_SITE,
+        LocationSource.UNKNOWN,
+    }:
+        if (
+            has_map_pin
+            or has_coordinates
+        ):
+            raise LocationValidationError(
+                f"{source.value} must not include "
+                "report-specific coordinates"
+            )
+
+        return
+
+    raise LocationValidationError(
+        "Unsupported location source"
+    )
 
 
 def validate_location_confidence(
+    *,
     submitted_confidence_code: str | None,
-    has_map_pin: bool,
+    has_precise_coordinates: bool,
 ) -> str:
     """
-    Validate the observer's confidence against how they gave the location.
+    Validate confidence against whether the report has
+    report-specific coordinates.
 
-    Replaces the earlier derive_location_confidence(...), which accepted any
-    valid code regardless of whether coordinates were supplied. That allowed
-    "exact" with no pin, producing a site-only location claiming 25 m accuracy
-    with nothing to be accurate about. Overstating precision is the more
-    damaging error here, because a coordinator reading "Exact" would trust a
-    position that was never given.
+    Coordinate source:
+        exact / within_100m / within_1km / unsure
 
-    The rules:
-    - no pin  -> dive_site_only only
-    - a pin   -> anything except dive_site_only
-
-    When nothing was submitted a compatible default is chosen: dive_site_only
-    without a pin, unsure with one. A pin whose accuracy the observer did not
-    state is treated as unsure rather than assumed accurate.
+    No coordinate source:
+        dive_site_only
     """
 
     if submitted_confidence_code is None:
-        if has_map_pin:
+        if has_precise_coordinates:
             return UNSURE_CONFIDENCE
+
         return DIVE_SITE_ONLY_CONFIDENCE
 
-    if submitted_confidence_code not in VALID_LOCATION_CONFIDENCE_CODES:
+    if (
+        submitted_confidence_code
+        not in VALID_LOCATION_CONFIDENCE_CODES
+    ):
         raise LocationValidationError(
             "location confidence must be one of: "
-            + ", ".join(sorted(VALID_LOCATION_CONFIDENCE_CODES))
+            + ", ".join(
+                sorted(
+                    VALID_LOCATION_CONFIDENCE_CODES
+                )
+            )
         )
 
-    if has_map_pin and submitted_confidence_code in CONFIDENCE_CODES_WITHOUT_A_PIN:
+    if (
+        has_precise_coordinates
+        and submitted_confidence_code
+        in CONFIDENCE_CODES_WITHOUT_COORDINATES
+    ):
         raise LocationValidationError(
-            f"Confidence {submitted_confidence_code} cannot be used with a map "
-            "pin, because it describes a location given by dive site alone"
+            f"Confidence "
+            f"{submitted_confidence_code} "
+            "cannot be used with precise coordinates"
         )
 
-    if not has_map_pin and submitted_confidence_code in CONFIDENCE_CODES_REQUIRING_A_PIN:
+    if (
+        not has_precise_coordinates
+        and submitted_confidence_code
+        in CONFIDENCE_CODES_REQUIRING_COORDINATES
+    ):
         raise LocationValidationError(
-            f"Confidence {submitted_confidence_code} requires coordinates; "
-            f"without a map pin the only valid confidence is "
-            f"{DIVE_SITE_ONLY_CONFIDENCE}"
+            f"Confidence "
+            f"{submitted_confidence_code} "
+            "requires precise coordinates"
         )
 
     return submitted_confidence_code
 
 
 def normalise_observation_location(
+    *,
     named_dive_site_id: int,
-    submitted_confidence_code: str | None = None,
-    latitude: float | Decimal | None = None,
-    longitude: float | Decimal | None = None,
-    relocation_notes: str | None = None,
+    submitted_source: (
+        LocationSource | None
+    ) = None,
+    submitted_confidence_code: (
+        str | None
+    ) = None,
+    map_pin_latitude: (
+        float | Decimal | None
+    ) = None,
+    map_pin_longitude: (
+        float | Decimal | None
+    ) = None,
+    coordinate_latitude: (
+        float | Decimal | None
+    ) = None,
+    coordinate_longitude: (
+        float | Decimal | None
+    ) = None,
+    relocation_notes: (
+        str | None
+    ) = None,
 ) -> dict:
     """
-    Turn what the observer submitted into the arguments reefcare_submit_report expects.
+    Normalise all five canonical source types into the
+    arguments expected by reefcare_submit_report().
 
-    The named dive site is always the general location (US4.1 AC2). A map pin is
-    an optional refinement on top of it, never a replacement.
-
-    Two database rules are honoured here so the caller cannot trip them:
-    a pin source must carry coordinates, and named_dive_site must not. When no
-    pin is given, latitude and longitude are returned as None rather than
-    guessed from the site centroid, because the site already provides the
-    location and a fabricated point would look more precise than the truth.
+    The selected named dive site remains the general
+    location for every report.
     """
 
-    if named_dive_site_id is None or named_dive_site_id <= 0:
+    if (
+        named_dive_site_id is None
+        or named_dive_site_id <= 0
+    ):
         raise LocationValidationError(
-            "A named dive site is required for every observation"
+            "A named dive site is required "
+            "for every observation"
         )
 
-    validate_coordinates(latitude=latitude, longitude=longitude)
-
-    the_pin_was_supplied = latitude is not None and longitude is not None
-
-    the_confidence_code = validate_location_confidence(
-        submitted_confidence_code=submitted_confidence_code,
-        has_map_pin=the_pin_was_supplied,
+    validate_coordinates(
+        latitude=map_pin_latitude,
+        longitude=map_pin_longitude,
     )
 
-    if the_pin_was_supplied:
-        the_source_code = LOCATION_SOURCE_MANUAL_MAP_PIN
-        the_latitude = latitude
-        the_longitude = longitude
+    validate_coordinates(
+        latitude=coordinate_latitude,
+        longitude=coordinate_longitude,
+    )
+
+    has_map_pin = (
+        map_pin_latitude is not None
+        and map_pin_longitude is not None
+    )
+
+    has_coordinates = (
+        coordinate_latitude is not None
+        and coordinate_longitude is not None
+    )
+
+    source = resolve_location_source(
+        submitted_source=submitted_source,
+        has_map_pin=has_map_pin,
+        has_coordinates=has_coordinates,
+    )
+
+    validate_location_source_shape(
+        source=source,
+        has_map_pin=has_map_pin,
+        has_coordinates=has_coordinates,
+    )
+
+    if (
+        source
+        == LocationSource.MANUAL_MAP_PIN
+    ):
+        latitude = map_pin_latitude
+        longitude = map_pin_longitude
+
+    elif source in {
+        LocationSource.ENTERED_COORDINATES,
+        LocationSource.DEVICE_METADATA,
+    }:
+        latitude = coordinate_latitude
+        longitude = coordinate_longitude
+
     else:
-        the_source_code = LOCATION_SOURCE_NAMED_DIVE_SITE
-        the_latitude = None
-        the_longitude = None
+        latitude = None
+        longitude = None
 
-    # relocation notes are often more useful to a removal team than a
-    # coordinate, so blank strings are normalised away rather than stored
-    the_relocation_notes = None
+    has_precise_coordinates = (
+        latitude is not None
+        and longitude is not None
+    )
 
-    if relocation_notes is not None and relocation_notes.strip() != "":
-        the_relocation_notes = relocation_notes.strip()
+    confidence_code = (
+        validate_location_confidence(
+            submitted_confidence_code=(
+                submitted_confidence_code
+            ),
+            has_precise_coordinates=(
+                has_precise_coordinates
+            ),
+        )
+    )
+
+    normalised_notes = None
+
+    if (
+        relocation_notes is not None
+        and relocation_notes.strip() != ""
+    ):
+        normalised_notes = (
+            relocation_notes.strip()
+        )
 
     return {
-        "location_source_code": the_source_code,
-        "location_confidence_code": the_confidence_code,
-        "latitude": the_latitude,
-        "longitude": the_longitude,
-        "relocation_notes": the_relocation_notes,
+        "location_source_code":
+            source.value,
+
+        "location_confidence_code":
+            confidence_code,
+
+        "latitude":
+            latitude,
+
+        "longitude":
+            longitude,
+
+        "relocation_notes":
+            normalised_notes,
     }
