@@ -2,12 +2,20 @@ from dataclasses import dataclass
 from functools import lru_cache
 from uuid import uuid4
 
+import mimetypes
+
 from fastapi import UploadFile
-from starlette.concurrency import run_in_threadpool
-from supabase import Client, create_client
+from starlette.concurrency import (
+    run_in_threadpool,
+)
+from supabase import (
+    Client,
+    create_client,
+)
 
-from app.core.config import settings
-
+from app.core.config import (
+    settings,
+)
 from app.core.exceptions import (
     NotFoundError,
 )
@@ -18,7 +26,6 @@ from app.services.case_service import (
     get_owned_case,
 )
 
-import mimetypes
 
 ALLOWED_PHOTO_TYPES = {
     "image/jpeg": ".jpg",
@@ -26,42 +33,62 @@ ALLOWED_PHOTO_TYPES = {
     "image/webp": ".webp",
 }
 
-MAX_PHOTO_BYTES = 10 * 1024 * 1024 # 10 MB
+MAX_PHOTO_BYTES = (
+    10 * 1024 * 1024
+)
 
-class EvidenceValidationError(ValueError):
+
+class EvidenceValidationError(
+    ValueError
+):
     """
     Raised when an uploaded evidence file is invalid.
     """
 
 
-class EvidenceTooLargeError(EvidenceValidationError):
+class EvidenceTooLargeError(
+    EvidenceValidationError
+):
     """
-    Raised when an uploaded evidence file exceeds the maximum allowed size.
+    Raised when an uploaded evidence file exceeds the
+    maximum allowed size.
     """
+
     pass
 
 
 class EvidenceStorageError(Exception):
     """
-    Raised when evidence cannot be written to private storage.
+    Raised when evidence cannot be written to or loaded
+    from private storage.
     """
 
 
 @dataclass(slots=True)
 class StoredEvidence:
     """
-    Metadata about a successfully stored private evidence object.
+    Metadata about a successfully stored private evidence
+    object.
 
-    Only file_reference is persisted by the current
-    reefcare_submit_report() function.
+    file_reference is the private Supabase object key.
 
-    file_size_bytes and content_type remain useful to the
-    application even though the current SQL function does
-    not persist file_size_bytes.
+    It must never be exposed directly to frontend or AI
+    consumers.
     """
 
     file_reference: str
     file_size_bytes: int
+    content_type: str
+
+
+@dataclass(slots=True)
+class EvidenceFile:
+    """
+    Private evidence bytes after ownership and
+    report/evidence checks have succeeded.
+    """
+
+    content: bytes
     content_type: str
 
 
@@ -71,13 +98,14 @@ def _get_supabase_client() -> Client:
     Return the server-side Supabase client used for
     private evidence storage.
 
-    The configured secret key must never be exposed
-    to frontend code.
+    The configured secret key must never be exposed to
+    frontend code.
     """
 
     return create_client(
         settings.supabase_url,
-        settings.supabase_secret_key.get_secret_value(),
+        settings.supabase_secret_key
+        .get_secret_value(),
     )
 
 
@@ -86,13 +114,16 @@ def _validate_file_signature(
     content: bytes,
 ) -> None:
     """
-    Perform a small integrity check against common image magic bytes.
+    Perform a lightweight integrity check against common
+    image magic bytes.
 
-    This is not intended to deeply inspect or transform the image.
+    This does not deeply inspect or transform the image.
     """
 
     if content_type == "image/jpeg":
-        if not content.startswith(b"\xff\xd8\xff"):
+        if not content.startswith(
+            b"\xff\xd8\xff"
+        ):
             raise EvidenceValidationError(
                 "Uploaded file is not a valid JPEG image"
             )
@@ -108,31 +139,23 @@ def _validate_file_signature(
     elif content_type == "image/webp":
         if (
             len(content) < 12
-            or not content.startswith(b"RIFF")
-            or content[8:12] != b"WEBP"
+            or not content.startswith(
+                b"RIFF"
+            )
+            or content[8:12]
+            != b"WEBP"
         ):
             raise EvidenceValidationError(
                 "Uploaded file is not a valid WebP image"
             )
 
 
-@dataclass(slots=True)
-class EvidenceFile:
-    """
-    Private evidence bytes after ownership and
-    report/evidence checks have succeeded.
-    """
-
-    content: bytes
-    content_type: str
-
-
 def _content_type_for_reference(
     file_reference: str,
 ) -> str:
     """
-    Infer the response MIME type from the
-    private object key.
+    Infer the response MIME type from the private object
+    key.
     """
 
     guessed_type, _ = (
@@ -141,7 +164,10 @@ def _content_type_for_reference(
         )
     )
 
-    if guessed_type in ALLOWED_PHOTO_TYPES:
+    if (
+        guessed_type
+        in ALLOWED_PHOTO_TYPES
+    ):
         return guessed_type
 
     return "application/octet-stream"
@@ -155,8 +181,8 @@ async def get_case_evidence_file(
     coordinator_id: int,
 ) -> EvidenceFile:
     """
-    Return private evidence only to the
-    coordinator who currently owns the case.
+    Return private evidence only to the coordinator who
+    currently owns the case.
 
     Security sequence:
 
@@ -189,21 +215,26 @@ async def get_case_evidence_file(
     )
 
     if evidence is None:
-        # Do not reveal whether the evidence
-        # belongs to a different case.
+        # Do not reveal whether the evidence belongs to a
+        # different case.
         raise NotFoundError(
             "Evidence not found"
         )
 
     file_reference = (
-        evidence["file_reference"]
+        evidence[
+            "file_reference"
+        ]
     )
 
     def download_object():
-        client = _get_supabase_client()
+        client = (
+            _get_supabase_client()
+        )
 
         return (
-            client.storage
+            client
+            .storage
             .from_(
                 settings
                 .supabase_storage_bucket
@@ -246,16 +277,17 @@ async def validate_photo(
     - basic file signature
 
     Returns the validated file bytes.
-
-    Raises:
-        EvidenceValidationError
     """
 
     content_type = (
-        photo.content_type or ""
+        photo.content_type
+        or ""
     ).lower()
 
-    if content_type not in ALLOWED_PHOTO_TYPES:
+    if (
+        content_type
+        not in ALLOWED_PHOTO_TYPES
+    ):
         raise EvidenceValidationError(
             "Unsupported photo type. "
             "Allowed types are JPEG, PNG and WebP."
@@ -272,9 +304,12 @@ async def validate_photo(
             "Uploaded photo is empty"
         )
 
-    if len(content) > MAX_PHOTO_BYTES:
+    if (
+        len(content)
+        > MAX_PHOTO_BYTES
+    ):
         raise EvidenceTooLargeError(
-            f"Photo exceeds the maximum allowed size "
+            "Photo exceeds the maximum allowed size "
             f"of {MAX_PHOTO_BYTES // (1024 * 1024)} MB"
         )
 
@@ -292,19 +327,22 @@ async def store_private_evidence(
     content: bytes,
 ) -> StoredEvidence:
     """
-    Store validated evidence in the private
-    Supabase Storage bucket.
+    Store validated evidence in the private Supabase
+    Storage bucket.
 
-    The returned file_reference is an opaque
+    The returned file_reference is an opaque private
     storage object key, not a public URL.
     """
 
     content_type = (
-        photo.content_type or ""
+        photo.content_type
+        or ""
     ).lower()
 
-    extension = ALLOWED_PHOTO_TYPES.get(
-        content_type
+    extension = (
+        ALLOWED_PHOTO_TYPES.get(
+            content_type
+        )
     )
 
     if extension is None:
@@ -313,23 +351,31 @@ async def store_private_evidence(
         )
 
     object_key = (
-        f"evidence/{uuid4().hex}{extension}"
+        f"evidence/"
+        f"{uuid4().hex}"
+        f"{extension}"
     )
 
     def upload_object():
-        client = _get_supabase_client()
+        client = (
+            _get_supabase_client()
+        )
 
         return (
-            client.storage
+            client
+            .storage
             .from_(
-                settings.supabase_storage_bucket
+                settings
+                .supabase_storage_bucket
             )
             .upload(
                 path=object_key,
                 file=content,
                 file_options={
-                    "content-type": content_type,
-                    "upsert": "false",
+                    "content-type":
+                        content_type,
+                    "upsert":
+                        "false",
                 },
             )
         )
@@ -346,7 +392,9 @@ async def store_private_evidence(
 
     return StoredEvidence(
         file_reference=object_key,
-        file_size_bytes=len(content),
+        file_size_bytes=len(
+            content
+        ),
         content_type=content_type,
     )
 
@@ -357,41 +405,56 @@ def prepare_evidence_metadata(
     captured_at=None,
 ) -> dict:
     """
-    Convert stored-file information to the exact JSON shape consumed by
-    PostgreSQL reefcare_submit_report().
+    Convert one privately stored evidence object into the
+    JSON shape consumed by reefcare_submit_report().
 
-    Current SQL reads:
-        media_type
-        file_reference
-        captured_at
+    PostgreSQL currently persists:
+    - media_type
+    - file_reference
+    - captured_at
 
-    The current SQL function does NOT persist:
-        file_size_bytes
-        checksum
-        display_order
+    reefcare_submit_report() also associates each evidence
+    row with the report's confirmed dive_session_id.
 
-    Therefore those values are deliberately not placed into the JSONB
-    submission payload.
+    captured_at is optional contextual metadata.
 
-    captured_at is optional in Iteration 1. No EXIF extraction is
-    performed here.
+    It must never silently alter:
+    - confirmed dive session
+    - selected dive site
+    - report location
+
+    Current PostgreSQL submission does not yet persist:
+    - file_size_bytes
+    - custom display_order
+
+    Those are therefore not placed into the submission
+    JSON until the canonical database function supports
+    them.
     """
 
     if captured_at is None:
         captured_at_value = None
-    elif hasattr(captured_at, "isoformat"):
+
+    elif hasattr(
+        captured_at,
+        "isoformat",
+    ):
         captured_at_value = (
             captured_at.isoformat()
         )
+
     else:
         captured_at_value = str(
             captured_at
         )
 
     return {
-        "media_type": "photo",
+        "media_type":
+            "photo",
+
         "file_reference":
             stored_file.file_reference,
+
         "captured_at":
             captured_at_value,
     }
@@ -401,23 +464,29 @@ async def delete_private_evidence(
     file_reference: str,
 ) -> None:
     """
-    Best-effort deletion of a private Supabase
-    Storage object.
+    Best-effort deletion of a private Supabase Storage
+    object.
 
-    Used to compensate when database report
-    submission fails after evidence was uploaded.
+    Used to compensate when database report submission
+    fails after evidence was uploaded.
     """
 
     def remove_object():
-        client = _get_supabase_client()
+        client = (
+            _get_supabase_client()
+        )
 
         return (
-            client.storage
+            client
+            .storage
             .from_(
-                settings.supabase_storage_bucket
+                settings
+                .supabase_storage_bucket
             )
             .remove(
-                [file_reference]
+                [
+                    file_reference
+                ]
             )
         )
 
@@ -428,16 +497,20 @@ async def delete_private_evidence(
 
     except Exception:
         # Best-effort cleanup.
-        # Log this when application logging is introduced.
+        #
+        # Storage cleanup failure must not replace the
+        # original report-submission exception.
         pass
 
 
 async def cleanup_private_evidence(
-    stored_files: list[StoredEvidence],
+    stored_files: list[
+        StoredEvidence
+    ],
 ) -> None:
     """
-    Best-effort cleanup for all evidence files stored during
-    a submission attempt.
+    Best-effort cleanup for all evidence files stored
+    during a submission attempt.
     """
 
     for stored_file in stored_files:

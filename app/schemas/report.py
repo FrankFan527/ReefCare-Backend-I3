@@ -27,6 +27,45 @@ class MapPinInput(APIModel):
     )
 
 
+class EvidenceMetadataInput(APIModel):
+    """
+    Optional metadata for one uploaded evidence file.
+
+    The order of evidenceMetadata corresponds to the order
+    of the multipart photos array.
+
+    captured_at is contextual information only.
+
+    It must never silently change:
+    - dive session
+    - dive site
+    - report location
+    """
+
+    captured_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_captured_at(
+        self,
+    ):
+        if self.captured_at is None:
+            return self
+
+        if self.captured_at.tzinfo is None:
+            raise ValueError(
+                "capturedAt must include a timezone"
+            )
+
+        if self.captured_at > datetime.now(
+            timezone.utc
+        ):
+            raise ValueError(
+                "capturedAt cannot be in the future"
+            )
+
+        return self
+
+
 class ObservationLocationInput(APIModel):
     """
     Observation location and provenance.
@@ -62,7 +101,8 @@ class ObservationLocationInput(APIModel):
         LocationSource | None
     ) = None
 
-    # Existing I1 field. Retained for compatibility.
+    # Existing I1 field.
+    # Retained for backward compatibility.
     map_pin: MapPinInput | None = None
 
     # Used for manually entered coordinates or coordinates
@@ -95,6 +135,7 @@ class ObservationLocationInput(APIModel):
                     LocationSource
                     .MANUAL_MAP_PIN
                 )
+
             else:
                 source = (
                     LocationSource
@@ -301,6 +342,17 @@ class ReportCreate(APIModel):
     )
 
     location: ObservationLocationInput
+
+    # Optional I2 metadata for uploaded evidence.
+    #
+    # Backward compatibility:
+    # an empty list means the old I1 request contract still
+    # works and captured_at will be stored as NULL.
+    evidence_metadata: list[
+        EvidenceMetadataInput
+    ] = Field(
+        default_factory=list,
+    )
 
     @model_validator(mode="after")
     def validate_report_submission(
