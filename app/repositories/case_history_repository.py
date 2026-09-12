@@ -5,7 +5,7 @@
 # "Prefer query over existing report/case_event/case_decision. Do not duplicate
 # case history unnecessarily." Everything below is a read.
 #
-# Three facts about the schema shape this file:
+# Four facts about the schema shape this file:
 #
 #   report carries no closure columns at all. A case is closed because its
 #   current_status_id points at a case_status row with is_terminal = true.
@@ -17,6 +17,11 @@
 #
 #   Referrals are plural for the same reason. US5.8 AC3 asks for referral
 #   history, so every referral round is returned rather than only the last.
+#
+#   reefcare_close_report() writes its own case_decision row and derives
+#   response_type from the closure reason, so closing as referred_other_org
+#   produces a row indistinguishable from a real referral. Both referral
+#   queries below exclude rows carrying a closure_reason_id for that reason.
 # ---------------------------------------------------------------------------
 
 from datetime import datetime
@@ -146,6 +151,10 @@ async def list_closed_cases(
             -- Counted rather than fetched here. The referral detail is
             -- returned by list_referral_history() in one query for the whole
             -- page, instead of one query per row.
+            --
+            -- closure_reason_id IS NULL matches the same exclusion in
+            -- list_referral_history(). Both must agree, or was_referred=true
+            -- returns a case whose referrals array then comes back empty.
             LEFT JOIN LATERAL (
                 SELECT COUNT(*) AS referral_count
                 FROM case_decision AS cd2
@@ -153,6 +162,7 @@ async def list_closed_cases(
                     cd2.report_id = r.report_id
                     AND cd2.response_type = :referral_response_type
                     AND COALESCE(BTRIM(cd2.referred_to), '') <> ''
+                    AND cd2.closure_reason_id IS NULL
             ) AS ref ON TRUE
 
             WHERE
@@ -278,6 +288,24 @@ async def list_referral_history(
                 AND cd.response_type = :referral_response_type
                 AND COALESCE(BTRIM(cd.referred_to), '') <> ''
 
+                -- A referral is something the coordinator decided, not
+                -- something a closure implied. reefcare_close_report() writes
+                -- a second case_decision row and derives its response_type
+                -- from the closure reason, so closing as referred_other_org
+                -- produces a row that looks identical to the original
+                -- referral and the same referral appears twice.
+                --
+                -- That row is required rather than accidental:
+                -- trg_report_closure_reason is deferrable and will not let a
+                -- case reach a terminal status without a decision carrying a
+                -- closure reason. So it is excluded on read instead of
+                -- prevented on write.
+                --
+                -- Filtered on closure_reason_id rather than deduplicated by
+                -- organisation, because two genuine referrals to the same body
+                -- are a real case: referred, returned, referred again.
+                AND cd.closure_reason_id IS NULL
+
             ORDER BY cd.decided_at ASC, cd.case_decision_id ASC
             """
         ),
@@ -294,12 +322,17 @@ async def list_referral_history(
     ]
 
 
-
 async def closure_reason_code_exists(
     db: AsyncSession,
     closure_reason_code: str,
 ) -> bool:
+    """
+    Whether a closure reason code is in the reference table.
 
+    Existence rather than selectability. A coordinator filtering their history
+    may legitimately search for a reason that is no longer offered: cases
+    closed under it still exist and are still theirs to look at.
+    """
 
     the_result = await db.execute(
         text(
