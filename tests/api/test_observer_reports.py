@@ -41,6 +41,15 @@ NOW = datetime(
     tzinfo=timezone.utc,
 )
 
+LAST_UPDATED = datetime(
+    2026,
+    8,
+    29,
+    7,
+    30,
+    tzinfo=timezone.utc,
+)
+
 
 async def override_db_session():
     # No real database for API route tests.
@@ -150,12 +159,20 @@ def test_my_reports_returns_camel_case_observer_safe_response(
                         general_location=(
                             "Tioman Island"
                         ),
+                        dive_site=(
+                            "Tiger Reef"
+                        ),
+                        observed_at=NOW,
                         status="received",
                         status_label=(
                             "Report received"
                         ),
                         outcome=None,
+                        needs_attention=False,
                         submitted_at=NOW,
+                        last_updated_at=(
+                            LAST_UPDATED
+                        ),
                     )
                 ],
                 page=1,
@@ -188,21 +205,64 @@ def test_my_reports_returns_camel_case_observer_safe_response(
     assert payload["pageSize"] == 20
     assert payload["total"] == 1
 
+    item = payload["items"][0]
+
     assert (
-        payload["items"][0]
-        ["reportReference"]
+        item["reportReference"]
         == "RC-0001"
     )
 
     assert (
-        payload["items"][0]["status"]
+        item["status"]
         == "received"
     )
 
     assert (
-        payload["items"][0]
-        ["statusLabel"]
+        item["statusLabel"]
         == "Report received"
+    )
+
+    # Iteration 2 Observer tracking fields.
+    assert (
+        item["diveSite"]
+        == "Tiger Reef"
+    )
+
+    assert (
+        item["observedAt"]
+        == NOW.isoformat().replace(
+            "+00:00",
+            "Z",
+        )
+    )
+
+    assert (
+        item["needsAttention"]
+        is False
+    )
+
+    assert (
+        item["lastUpdatedAt"]
+        == LAST_UPDATED.isoformat().replace(
+            "+00:00",
+            "Z",
+        )
+    )
+
+    # Observer response must remain safe.
+    assert (
+        "claimedByUserId"
+        not in item
+    )
+
+    assert (
+        "decisionNote"
+        not in item
+    )
+
+    assert (
+        "fileReference"
+        not in item
     )
 
     kwargs = (
@@ -276,16 +336,21 @@ def test_my_report_returns_observer_safe_detail(
                 ),
                 dive_site="Tiger Reef",
                 precise_location=None,
+                evidence_count=2,
                 status="received",
                 status_label=(
                     "Report received"
                 ),
                 outcome=None,
+                needs_attention=False,
                 information_request_reason=(
                     None
                 ),
                 closure=None,
                 submitted_at=NOW,
+                last_updated_at=(
+                    LAST_UPDATED
+                ),
             )
         )
     )
@@ -319,9 +384,44 @@ def test_my_report_returns_observer_safe_detail(
         == "Report received"
     )
 
-    assert "claimedByUserId" not in payload
-    assert "decisionNote" not in payload
-    assert "fileReference" not in payload
+    assert (
+        payload["evidenceCount"]
+        == 2
+    )
+
+    assert (
+        payload["needsAttention"]
+        is False
+    )
+
+    assert (
+        payload["lastUpdatedAt"]
+        == LAST_UPDATED.isoformat().replace(
+            "+00:00",
+            "Z",
+        )
+    )
+
+    # Observer detail must not expose private/internal fields.
+    assert (
+        "claimedByUserId"
+        not in payload
+    )
+
+    assert (
+        "decisionNote"
+        not in payload
+    )
+
+    assert (
+        "responseType"
+        not in payload
+    )
+
+    assert (
+        "fileReference"
+        not in payload
+    )
 
 
 def test_report_timeline_returns_plain_language_events(
@@ -338,12 +438,19 @@ def test_report_timeline_returns_plain_language_events(
                 report_reference=(
                     "RC-0002"
                 ),
+                current_status=(
+                    "under_review"
+                ),
+                current_status_label=(
+                    "Being reviewed"
+                ),
                 timeline=[
                     ObserverTimelineEvent(
                         status_label=(
                             "Report received"
                         ),
                         occurred_at=NOW,
+                        is_current=False,
                     ),
                     ObserverTimelineEvent(
                         status_label=(
@@ -351,12 +458,14 @@ def test_report_timeline_returns_plain_language_events(
                             "has your report"
                         ),
                         occurred_at=NOW,
+                        is_current=False,
                     ),
                     ObserverTimelineEvent(
                         status_label=(
                             "Being reviewed"
                         ),
                         occurred_at=NOW,
+                        is_current=True,
                     ),
                 ],
             )
@@ -385,6 +494,16 @@ def test_report_timeline_returns_plain_language_events(
         == "RC-0002"
     )
 
+    assert (
+        payload["currentStatus"]
+        == "under_review"
+    )
+
+    assert (
+        payload["currentStatusLabel"]
+        == "Being reviewed"
+    )
+
     assert [
         event["statusLabel"]
         for event in payload["timeline"]
@@ -396,6 +515,38 @@ def test_report_timeline_returns_plain_language_events(
         ),
         "Being reviewed",
     ]
+
+    assert (
+        payload["timeline"][0][
+            "isCurrent"
+        ]
+        is False
+    )
+
+    assert (
+        payload["timeline"][1][
+            "isCurrent"
+        ]
+        is False
+    )
+
+    assert (
+        payload["timeline"][2][
+            "isCurrent"
+        ]
+        is True
+    )
+
+    # Timeline remains Observer-safe.
+    assert (
+        "actorUserId"
+        not in payload["timeline"][0]
+    )
+
+    assert (
+        "decisionNote"
+        not in payload["timeline"][0]
+    )
 
 
 def test_my_reports_rejects_page_size_over_100(

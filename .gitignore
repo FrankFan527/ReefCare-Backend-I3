@@ -5,8 +5,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.py[cod]
+.pytest_cache/
 
 .env
+.env.*
 
 .vscode/
 .idea/

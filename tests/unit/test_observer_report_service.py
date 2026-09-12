@@ -1,12 +1,20 @@
-from datetime import date, datetime, timezone
+from datetime import (
+    date,
+    datetime,
+    timezone,
+)
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.core.enums import CaseStatus
 from app.core.exceptions import NotFoundError
-from app.repositories import report_repository
-from app.services import observer_report_service
+from app.repositories import (
+    report_repository,
+)
+from app.services import (
+    observer_report_service,
+)
 from app.services.observer_report_service import (
     ObserverReportValidationError,
     build_observer_report_projection,
@@ -25,55 +33,105 @@ NOW = datetime(
     tzinfo=timezone.utc,
 )
 
+LAST_UPDATED = datetime(
+    2026,
+    8,
+    29,
+    7,
+    30,
+    tzinfo=timezone.utc,
+)
+
 
 def test_projection_exposes_only_observer_safe_fields():
     report = {
-        "report_reference": "RC-0003",
-        "threat": "Marine debris",
-        "area": "Perhentian Islands",
-        "status": "closed_no_partner",
+        "report_reference":
+            "RC-0003",
+
+        "threat":
+            "Marine debris",
+
+        "area":
+            "Perhentian Islands",
+
+        "status":
+            "closed_no_partner",
+
         "status_label": (
             "Recorded, no active response programme "
             "currently covers this site"
         ),
+
         "closure_label": (
             "Recorded and kept — no active response "
             "programme currently covers this site"
         ),
-        "observed_at": NOW,
-        "estimated_depth_metres": 20.0,
+
+        "observed_at":
+            NOW,
+
+        "estimated_depth_metres":
+            20.0,
+
         "description": (
             "Plastic sacks and rope on the reef."
         ),
+
         "dive_site_name": (
             "Temple of the Sea (Tokong Laut)"
         ),
-        "information_request_reason": None,
+
+        # Iteration 2 tracking enhancement.
+        "evidence_count":
+            3,
+
+        "last_updated_at":
+            LAST_UPDATED,
+
+        "information_request_reason":
+            None,
+
         "public_closure_note": (
             "Retained for site history."
         ),
-        "submitted_at": NOW,
+
+        "submitted_at":
+            NOW,
 
         # These should NEVER appear to observer.
-        "claimed_by_user_id": 999,
+        "claimed_by_user_id":
+            999,
+
         "decision_note": (
             "internal-only reasoning"
         ),
+
+        "response_type":
+            "refer_or_share",
+
         "file_reference": (
             "private/object/key.jpg"
         ),
     }
 
     location = {
-        "latitude": 5.9,
-        "longitude": 102.7,
-        "uncertainty_metres": 1000,
+        "latitude":
+            5.9,
+
+        "longitude":
+            102.7,
+
+        "uncertainty_metres":
+            1000,
+
         "confidence_label": (
             "Within approximately 1 km"
         ),
+
         "source_label": (
             "Manually dropped map pin"
         ),
+
         "relocation_notes": (
             "North face of the pinnacle."
         ),
@@ -102,24 +160,87 @@ def test_projection_exposes_only_observer_safe_fields():
     )
 
     assert (
-        payload["preciseLocation"]
-        ["uncertaintyMetres"]
+        payload["preciseLocation"][
+            "uncertaintyMetres"
+        ]
         == 1000
     )
 
-    assert "claimedByUserId" not in payload
-    assert "decisionNote" not in payload
-    assert "fileReference" not in payload
+    assert (
+        payload["evidenceCount"]
+        == 3
+    )
+
+    assert (
+        payload["needsAttention"]
+        is False
+    )
+
+    assert (
+        payload["lastUpdatedAt"]
+        == LAST_UPDATED.isoformat().replace(
+            "+00:00",
+            "Z",
+        )
+    )
+
+    # Terminal closure label wins as the Observer-safe
+    # outcome rather than exposing response_type.
+    assert (
+        payload["outcome"]
+        == (
+            "Recorded and kept — no active response "
+            "programme currently covers this site"
+        )
+    )
+
+    assert (
+        payload["closure"][
+            "publicNote"
+        ]
+        == "Retained for site history."
+    )
+
+    assert (
+        "claimedByUserId"
+        not in payload
+    )
+
+    assert (
+        "decisionNote"
+        not in payload
+    )
+
+    assert (
+        "responseType"
+        not in payload
+    )
+
+    assert (
+        "fileReference"
+        not in payload
+    )
 
 
 def test_timeline_projection_uses_plain_language_labels():
     response = build_observer_timeline(
         report_reference="RC-0002",
+
+        current_status=(
+            CaseStatus.UNDER_REVIEW
+        ),
+
+        current_status_label=(
+            "Being reviewed"
+        ),
+
         rows=[
             {
                 "status_label":
                     "Report received",
-                "occurred_at": NOW,
+
+                "occurred_at":
+                    NOW,
             },
             {
                 "status_label":
@@ -127,12 +248,16 @@ def test_timeline_projection_uses_plain_language_labels():
                         "A case coordinator has "
                         "your report"
                     ),
-                "occurred_at": NOW,
+
+                "occurred_at":
+                    NOW,
             },
             {
                 "status_label":
                     "Being reviewed",
-                "occurred_at": NOW,
+
+                "occurred_at":
+                    LAST_UPDATED,
             },
         ],
     )
@@ -140,6 +265,16 @@ def test_timeline_projection_uses_plain_language_labels():
     assert (
         response.report_reference
         == "RC-0002"
+    )
+
+    assert (
+        response.current_status
+        == CaseStatus.UNDER_REVIEW
+    )
+
+    assert (
+        response.current_status_label
+        == "Being reviewed"
     )
 
     assert [
@@ -153,6 +288,21 @@ def test_timeline_projection_uses_plain_language_labels():
         ),
         "Being reviewed",
     ]
+
+    assert (
+        response.timeline[0].is_current
+        is False
+    )
+
+    assert (
+        response.timeline[1].is_current
+        is False
+    )
+
+    assert (
+        response.timeline[2].is_current
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -190,18 +340,34 @@ async def test_list_reports_passes_canonical_status_code_to_repository(
                 {
                     "report_reference":
                         "RC-0001",
+
                     "threat":
                         "Ghost fishing gear",
+
                     "area":
                         "Tioman Island",
+
+                    # Module C fields.
+                    "dive_site_name":
+                        "Tiger Reef",
+
+                    "observed_at":
+                        NOW,
+
                     "status":
                         "received",
+
                     "status_label":
                         "Report received",
+
                     "closure_label":
                         None,
+
                     "submitted_at":
                         NOW,
+
+                    "last_updated_at":
+                        LAST_UPDATED,
                 }
             ],
             1,
@@ -228,9 +394,31 @@ async def test_list_reports_passes_canonical_status_code_to_repository(
 
     assert response.total == 1
 
+    item = response.items[0]
+
     assert (
-        response.items[0].report_reference
+        item.report_reference
         == "RC-0001"
+    )
+
+    assert (
+        item.observed_at
+        == NOW
+    )
+
+    assert (
+        item.dive_site
+        == "Tiger Reef"
+    )
+
+    assert (
+        item.last_updated_at
+        == LAST_UPDATED
+    )
+
+    assert (
+        item.needs_attention
+        is False
     )
 
     kwargs = (
@@ -239,9 +427,22 @@ async def test_list_reports_passes_canonical_status_code_to_repository(
 
     assert kwargs["db"] is fake_db
     assert kwargs["observer_id"] == 42
-    assert kwargs["status_code"] == "received"
-    assert kwargs["from_date"] is None
-    assert kwargs["to_date"] is None
+
+    assert (
+        kwargs["status_code"]
+        == "received"
+    )
+
+    assert (
+        kwargs["from_date"]
+        is None
+    )
+
+    assert (
+        kwargs["to_date"]
+        is None
+    )
+
     assert kwargs["page"] == 1
     assert kwargs["page_size"] == 20
 
