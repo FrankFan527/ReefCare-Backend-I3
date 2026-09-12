@@ -487,3 +487,63 @@ class EvidenceAssessmentResponse(APIModel):
 
     assessed_at: datetime
     assessed_by: int
+
+
+
+class ReferralHistoryEntry(APIModel):
+
+
+    referred_to: str
+    decided_at: datetime
+
+    note: str | None = None
+    decided_by_name: str | None = None
+
+
+class CoordinatorHistoryItem(APIModel):
+    """
+    One closed case in the coordinator's own history.
+
+    closure_reason_code may be null. A case reaches a terminal status through
+    reefcare_change_status(), and only the decision path records a reason, so a
+    case closed by another route has a closed status and no stored reason.
+    Returning null says that honestly rather than inventing a reason to fill
+    the field.
+    """
+
+    report_reference: str
+
+    threat: str
+    area: str | None = None
+
+    status_code: CaseStatus
+    status_label: str
+
+    submitted_at: datetime
+    closed_at: datetime | None = None
+
+    closure_reason_code: str | None = None
+    closure_reason_label: str | None = None
+    closure_note: str | None = None
+
+    # US5.8 AC3. Empty when the case was never referred.
+    referrals: list[ReferralHistoryEntry] = []
+
+
+class CoordinatorHistoryResponse(APIModel):
+    """
+    A filtered page of the coordinator's closed cases.
+
+    filters_applied echoes back what the query actually ran with. US5.8 AC1
+    makes filtering the way a coordinator reaches their history, so a page of
+    results is ambiguous without it: three results could mean three matches or
+    a filter that silently did not apply.
+    """
+
+    items: list[CoordinatorHistoryItem]
+
+    page: int
+    page_size: int
+    total: int
+
+    filters_applied: dict
