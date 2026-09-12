@@ -1,14 +1,15 @@
 # ---------------------------------------------------------------------------
-# Coordinator case actions (US5.3, US5.4, US5.5).
+# Coordinator case actions (US5.3, US5.4, US5.5, US7.1).
 #
 # Thin HTTP adapters. All policy lives in the services, and domain exceptions
 # are not caught here: the global handlers registered in main.py map each
 # ServiceError subclass to its own status_code.
 #
-# The one exception is the closure endpoint, which keeps its DBAPIError
-# handling. trg_report_closure_reason is DEFERRABLE INITIALLY DEFERRED, so it
-# raises at COMMIT rather than at execute(). The global handlers have no way
-# to know a deferred constraint failed or to roll the transaction back.
+# The exceptions are the closure, evidence-assessment and action endpoints,
+# which keep their DBAPIError handling. trg_report_closure_reason is
+# DEFERRABLE INITIALLY DEFERRED, so it raises at COMMIT rather than at
+# execute(). The global handlers have no way to know a deferred constraint
+# failed or to roll the transaction back.
 #
 # The path uses reportReference rather than an internal id, because the
 # database functions are keyed on report_reference and it is the identifier
@@ -21,6 +22,12 @@ from sqlalchemy.exc import DBAPIError
 
 from app.api.dependencies.authorization import CurrentCoordinator
 from app.api.dependencies.db import DatabaseSession
+from app.schemas.action import (
+    ActionCreate,
+    ActionListResponse,
+    ActionResponse,
+    ActionTypeOption,
+)
 from app.schemas.case import (
     CaseClosureCreate,
     CaseClosureResponse,
@@ -31,10 +38,15 @@ from app.schemas.case import (
     ResponseTypeDecisionCreate,
     ResponseTypeDecisionResponse,
 )
+from app.services.case_action_service import (
+    list_action_type_options,
+    list_actions_for_owned_case,
+    record_action,
+)
+from app.services.case_assessment_service import record_evidence_assessment
 from app.services.case_closure_service import close_case
 from app.services.case_decision_service import record_decision
 from app.services.case_workflow_service import request_more_information
-from app.services.case_assessment_service import record_evidence_assessment
 
 
 router = APIRouter()
@@ -156,6 +168,7 @@ async def close_owned_case(
         closed_at=datetime.now(timezone.utc),
     )
 
+
 @router.post(
     "/reports/{report_reference}/evidence-assessment",
     response_model=EvidenceAssessmentResponse,
@@ -204,4 +217,122 @@ async def assess_case_evidence(
         status=the_result["status"],
         assessed_at=the_result["assessed_at"],
         assessed_by=the_result["assessed_by"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# US7.1 Basic conservation action record.
+#
+# Deliberately small. Section 10.5 of the Iteration 2 backend document is
+# explicit that E7 must not grow into the deferred Iteration 3 monitoring
+# workflow, so there is no update endpoint and no delete endpoint: an action is
+# superseded by recording a later one.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/action-types",
+    response_model=list[ActionTypeOption],
+)
+async def get_action_types(
+    current_user: CurrentCoordinator,
+    db: DatabaseSession,
+):
+    """
+    Return the action vocabulary a coordinator may currently choose from.
+
+    Read from the action_type reference table rather than a Python constant, so
+    labels can be corrected without a redeploy.
+    """
+
+    the_options = await list_action_type_options(db=db)
+
+    return [
+        ActionTypeOption(
+            code=the_option["code"],
+            label=the_option["label"],
+            description=the_option["description"],
+        )
+        for the_option in the_options
+    ]
+
+
+@router.post(
+    "/reports/{report_reference}/actions",
+    response_model=ActionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_case_action(
+    report_reference: str,
+    the_action_input: ActionCreate,
+    current_user: CurrentCoordinator,
+    db: DatabaseSession,
+):
+    """
+    Record a planned or completed conservation action on an owned case.
+
+    The commit sits inside the try for the same reason as closure and evidence
+    assessment: the action may move the case status, and a transition the
+    database refuses must not return 201 for a row that was rolled back.
+    """
+
+    # the actor comes from the verified token, never from the request
+    the_coordinator_id = current_user["user_id"]
+
+    try:
+        the_result = await record_action(
+            db=db,
+            report_reference=report_reference,
+            coordinator_id=the_coordinator_id,
+            action_type_code=the_action_input.action_type_code,
+            action_state=the_action_input.action_state.value,
+            action_date=the_action_input.action_date,
+            responsible_team=the_action_input.responsible_team,
+            notes=the_action_input.notes,
+        )
+
+        await db.commit()
+
+    except DBAPIError as the_error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The action could not be recorded in this case's current state",
+        ) from the_error
+
+    return ActionResponse(**the_result)
+
+
+@router.get(
+    "/reports/{report_reference}/actions",
+    response_model=ActionListResponse,
+)
+async def get_case_actions(
+    report_reference: str,
+    current_user: CurrentCoordinator,
+    db: DatabaseSession,
+):
+    """
+    Return every action recorded against an owned case, oldest first.
+
+    Ownership is verified in the service before any detail is returned: an
+    action names a responsible team and describes intended or completed
+    conservation work, which is not queue-safe information.
+    """
+
+    the_coordinator_id = current_user["user_id"]
+
+    the_actions = await list_actions_for_owned_case(
+        db=db,
+        report_reference=report_reference,
+        coordinator_id=the_coordinator_id,
+    )
+
+    return ActionListResponse(
+        report_reference=report_reference,
+        items=[
+            ActionResponse(**the_action)
+            for the_action in the_actions
+        ],
+        total=len(the_actions),
     )
