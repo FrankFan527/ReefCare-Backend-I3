@@ -115,10 +115,9 @@ async def get_coordinator_case(
         )
     )
 
-    # US5.2 AC2. ai_assisted stays None until US5.6 builds
-    # the Conservation Triage Brief. The argument is passed
-    # explicitly rather than left to the default so the
-    # place it will eventually be filled is obvious.
+    # US5.2 AC2. US5.6 v2.2 is a separate geographic-analysis API. Fetch optional
+    # hotspot-context independently so an analysis failure cannot block review.
+    # AI-assisted assessment content remains unimplemented.
     return build_coordinator_case_projection(
         case=case,
         location=location,

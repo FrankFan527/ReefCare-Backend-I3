@@ -8,6 +8,7 @@ from app.api.routes import (
     dive_sessions,
     evidence,
     health,
+    hotspots,
     public,
     reference,
     reports,
@@ -15,6 +16,12 @@ from app.api.routes import (
 
 
 api_router = APIRouter()
+
+api_router.include_router(
+    hotspots.router,
+    prefix="/coordinator",
+    tags=["Geographic Reporting Hotspots"],
+)
 
 
 api_router.include_router(
