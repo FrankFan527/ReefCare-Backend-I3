@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     app_env: str = "development"
     api_v1_prefix: str = "/api/v1"
 
+    # US5.6 stays independent of submission and case-review workflows.
+    hotspot_enabled: bool = True
+    hotspot_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    hotspot_map_config: str = "config/hotspot-sites.json"
+
     # Database
     database_url: str
 
