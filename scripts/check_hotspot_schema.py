@@ -23,7 +23,15 @@ REQUIRED = {
                "current_status_id", "threat_category_id", "dive_session_id", "claimed_by_user_id"},
     "case_status": {"case_status_id", "code", "internal_label", "is_terminal"},
     "threat_category": {"threat_category_id", "code", "label"},
-    "dive_site": {"dive_site_id", "name", "public_area_label", "region"},
+    "dive_site": {
+        "dive_site_id",
+        "name",
+        "public_area_label",
+        "region",
+        "centre_latitude",
+        "centre_longitude",
+        "default_uncertainty_metres",
+    },
     "dive_session": {"dive_session_id", "dive_site_id"},
     "app_user": {"user_id", "display_name"},
 }

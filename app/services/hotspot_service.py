@@ -4,19 +4,14 @@ import asyncio
 import logging
 from collections import Counter
 from datetime import date, datetime, timedelta
-from decimal import Decimal
-from pathlib import Path
-from typing import Literal
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, ValidationError, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.core.exceptions import NotFoundError, ServiceError
 from app.repositories import hotspot_repository as repository
-from app.schemas.common import APIModel
 from app.schemas.hotspot import (
     FrequencyBucket, GeneralisedMapLocation, HotspotAnalysisResponse,
     HotspotContextResponse, HotspotFilters, HotspotIntakeItem,
@@ -47,53 +42,6 @@ class AnalysisUnavailable(ServiceError):
         super().__init__(headers={"Cache-Control": "private, no-store", "Retry-After": "30"})
 
 
-class ConfiguredMapSite(APIModel):
-    model_config = {"extra": "forbid"}
-    site_id: int = Field(gt=0)
-    # An explicit operator assertion, not an automatic approval mechanism.
-    approved_generalised: Literal[True]
-    latitude: Decimal = Field(ge=-90, le=90, decimal_places=2)
-    longitude: Decimal = Field(ge=-180, le=180, decimal_places=2)
-    uncertainty_metres: int = Field(ge=1000, le=100000)
-    basis: str = Field(min_length=10, max_length=300)
-
-
-class MapConfiguration(APIModel):
-    model_config = {"extra": "forbid"}
-    sites: list[ConfiguredMapSite]
-
-    @model_validator(mode="after")
-    def unique_sites(self):
-        if len({site.site_id for site in self.sites}) != len(self.sites):
-            raise ValueError("Map site IDs must be unique")
-        return self
-
-
-def load_map_locations() -> tuple[dict[int, GeneralisedMapLocation], bool]:
-    """Only this explicit configuration supplies map positions, never report GPS.
-
-    The second result distinguishes broken configuration from missing geometry.
-    Relative paths resolve from the backend root, independent of process cwd.
-    """
-    path = Path(settings.hotspot_map_config)
-    if not path.is_absolute():
-        path = Path(__file__).resolve().parents[2] / path
-    try:
-        config = MapConfiguration.model_validate_json(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}, False
-    except (OSError, ValueError, ValidationError):
-        logger.warning("US5.6 map configuration could not be loaded")
-        return {}, True
-
-    return {
-        site.site_id: GeneralisedMapLocation(
-            latitude=float(site.latitude), longitude=float(site.longitude),
-            uncertainty_metres=site.uncertainty_metres, basis=site.basis,
-        ) for site in config.sites
-    }, False
-
-
 def resolve_filters(query: HotspotQuery, today: date | None = None) -> HotspotFilters:
     today = today or datetime.now(MALAYSIA).date()
     return HotspotFilters(
@@ -109,6 +57,66 @@ def site_projection(row) -> HotspotSite | None:
     return HotspotSite(
         site_id=row["site_id"], name=row["site_name"],
         area=row["area"], region=row["region"],
+    )
+
+
+def site_map_projection(
+    row,
+) -> GeneralisedMapLocation | None:
+    """
+    Build a privacy-safe map anchor from the report's
+    named dive-site reference.
+
+    The repository has already rounded the canonical
+    dive-site centre to two decimal places.
+
+    This function never reads or uses report_location
+    coordinates.
+    """
+
+    latitude = row.get(
+        "map_latitude"
+    )
+
+    longitude = row.get(
+        "map_longitude"
+    )
+
+    if (
+        latitude is None
+        or longitude is None
+    ):
+        return None
+
+    uncertainty_metres = max(
+        int(
+            row.get(
+                "map_uncertainty_metres"
+            )
+            or 1000
+        ),
+        1000,
+    )
+
+    return GeneralisedMapLocation(
+        latitude=float(
+            latitude
+        ),
+
+        longitude=float(
+            longitude
+        ),
+
+        uncertainty_metres=(
+            uncertainty_metres
+        ),
+
+        basis=(
+            "Generalised named dive-site reference "
+            "centre derived from the report's dive "
+            "session; rounded to 2 decimal places "
+            "and not an incident location."
+        ),
     )
 
 
@@ -214,10 +222,9 @@ async def get_analysis(db, query: HotspotQuery) -> HotspotAnalysisResponse:
     site_groups = {}
     for row in groups:
         site_groups.setdefault(row["site_id"], []).append(row)
-    locations, map_failed = load_map_locations()
     sites = [HotspotSiteSummary(
         **build_summary(rows, filters).model_dump(by_alias=False),
-        site=site_projection(rows[0]), map_location=locations.get(site_id),
+        site=site_projection(rows[0]), map_location=site_map_projection(rows[0]),
     ) for site_id, rows in site_groups.items()]
     sites.sort(key=lambda item: (-item.report_count, item.site.site_id))
     included = data["included_report_count"]
@@ -230,14 +237,12 @@ async def get_analysis(db, query: HotspotQuery) -> HotspotAnalysisResponse:
         state, message = "insufficient_data", "Reports exist, but none can be assigned to a usable named site and the selected observation period."
     else:
         state, message = "no_matches", "No reports match these filters. This does not establish absence of reef threats."
-    if map_failed:
-        map_state, map_message = "unavailable", "Map configuration is unavailable; named-site summaries remain usable."
-    elif state == "no_matches":
+    if state == "no_matches":
         map_state, map_message = "no_matches", message
     elif mapped == 0:
-        map_state, map_message = "insufficient_data", "No approved generalised map locations are available for these reports. Use named-site summaries."
+        map_state, map_message = "insufficient_data", "No named dive sites in this selection have usable reference-centre coordinates. Use named-site summaries."
     elif mapped < included:
-        map_state, map_message = "partial", "Only reports at sites with approved generalised map locations are plotted."
+        map_state, map_message = "partial", "Only reports at named sites with usable reference-centre coordinates are plotted."
     else:
         map_state, map_message = "ready", "Markers represent generalised named sites, not underwater incident points."
     return HotspotAnalysisResponse(

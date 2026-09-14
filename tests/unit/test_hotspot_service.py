@@ -15,10 +15,40 @@ from app.services import hotspot_service as service
 NOW = datetime(2026, 9, 13, 12, tzinfo=timezone.utc)
 
 
-def group(site=1, threat="unsure", bucket="2026-09-01", count=1):
-    return dict(site_id=site, site_name=f"Site {site}", area="Area A", region="Region A",
-                threat_code=threat, threat_label=service.THREATS.get(threat, threat),
-                bucket=bucket, report_count=count)
+def group(
+    site=1,
+    threat="unsure",
+    bucket="2026-09-01",
+    count=1,
+    map_latitude=None,
+    map_longitude=None,
+    map_uncertainty_metres=None,
+):
+    return dict(
+        site_id=site,
+        site_name=f"Site {site}",
+        area="Area A",
+        region="Region A",
+
+        map_latitude=map_latitude,
+        map_longitude=map_longitude,
+
+        map_uncertainty_metres=(
+            map_uncertainty_metres
+        ),
+
+        threat_code=threat,
+
+        threat_label=(
+            service.THREATS.get(
+                threat,
+                threat,
+            )
+        ),
+
+        bucket=bucket,
+        report_count=count,
+    )
 
 
 def query(**overrides):
@@ -153,16 +183,59 @@ async def test_cleanup_failure_still_returns_unavailable(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_partial_map_does_not_hide_named_site_reports(db, monkeypatch):
-    monkeypatch.setattr(service.repository, "get_analysis", AsyncMock(return_value=data([group(count=2), group(site=2)])))
-    location = service.GeneralisedMapLocation(latitude=1.2, longitude=104.1, uncertainty_metres=2000, basis="Generalised area")
-    monkeypatch.setattr(service, "load_map_locations", lambda: ({1: location}, False))
-    result = await service.get_analysis(db, query())
-    assert result.state == "ready" and result.map_state == "partial"
-    assert result.summary.report_count == 3
-    assert result.data_quality.mapped_report_count == 2
-    assert result.data_quality.unmapped_report_count == 1
-    assert sum(x.report_count for x in result.sites) == 3
+async def test_partial_map_does_not_hide_named_site_reports(
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        service.repository,
+        "get_analysis",
+        AsyncMock(
+            return_value=data(
+                [
+                    group(
+                        count=2,
+                        map_latitude=1.20,
+                        map_longitude=104.10,
+                        map_uncertainty_metres=2000,
+                    ),
+                    group(
+                        site=2,
+                    ),
+                ]
+            )
+        ),
+    )
+
+    result = await service.get_analysis(
+        db,
+        query(),
+    )
+
+    assert (
+        result.state
+        == "ready"
+    )
+
+    assert (
+        result.map_state
+        == "partial"
+    )
+
+    assert (
+        result.summary.report_count
+        == 3
+    )
+
+    assert (
+        result.data_quality.mapped_report_count
+        == 2
+    )
+
+    assert (
+        result.data_quality.unmapped_report_count
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -174,18 +247,59 @@ async def test_broken_map_preserves_analysis(db, monkeypatch):
     assert result.summary.report_count == 1
 
 
-def test_only_explicit_generalised_config_provides_map_coordinates(tmp_path, monkeypatch):
-    path = tmp_path / "map.json"
-    monkeypatch.setattr(service.settings, "hotspot_map_config", str(path))
-    assert service.load_map_locations() == ({}, False)
-    config = {"sites": [{"siteId": 1, "approvedGeneralised": True, "latitude": 1.2, "longitude": 104.1,
-                         "uncertaintyMetres": 2000, "basis": "Approved generalised site area"}]}
-    path.write_text(json.dumps(config))
-    locations, failed = service.load_map_locations()
-    assert not failed and locations[1].latitude == 1.2
-    config["sites"][0]["latitude"] = 1.123456
-    path.write_text(json.dumps(config))
-    assert service.load_map_locations() == ({}, True)
+@pytest.mark.asyncio
+async def test_site_reference_projection_is_generalised_and_never_uses_report_gps():
+    row = group(
+        map_latitude=1.20,
+        map_longitude=104.10,
+        map_uncertainty_metres=2500,
+    )
+
+    # Simulate protected report coordinates being
+    # accidentally present in an input object.
+    # They must be ignored.
+    row.update(
+        latitude=1.123456,
+        longitude=104.123456,
+    )
+
+    location = (
+        service.site_map_projection(
+            row
+        )
+    )
+
+    assert location.latitude == 1.20
+    assert location.longitude == 104.10
+
+    assert (
+        location.uncertainty_metres
+        == 2500
+    )
+
+    assert (
+        "not an incident location"
+        in location.basis
+    )
+
+
+@pytest.mark.asyncio
+async def test_site_reference_projection_requires_both_coordinates():
+    assert (
+        await service.site_map_projection(
+            group()
+        )
+        is None
+    )
+
+    assert (
+        await service.site_map_projection(
+            group(
+                map_latitude=1.20
+            )
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("owner,closed,ownership,action", [
