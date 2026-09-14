@@ -58,6 +58,29 @@ class Settings(BaseSettings):
         ge=1,
     )
 
+    # Epic 4 Smart Report Structuring
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-3.1-flash-lite"
+    gemini_base_url: str = (
+        "https://generativelanguage.googleapis.com/"
+        "v1beta"
+    )
+    smart_report_timeout_seconds: int = Field(
+        default=20,
+        ge=5,
+        le=60,
+    )
+    smart_report_rate_limit_requests: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+    )
+    smart_report_rate_limit_window_seconds: int = Field(
+        default=60,
+        ge=1,
+        le=3600,
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
