@@ -26,6 +26,9 @@ from app.api.dependencies.authorization import (
 from app.api.dependencies.db import (
     DatabaseSession,
 )
+from app.api.dependencies.rate_limit import (
+    smart_report_limiter,
+)
 from app.core.enums import (
     CaseStatus,
 )
@@ -51,6 +54,10 @@ from app.schemas.report import (
     ReportReviewRequest,
     ReportReviewResponse,
     ReportSubmittedResponse,
+)
+from app.schemas.smart_report import (
+    SmartReportStructureRequest,
+    SmartReportStructureResponse,
 )
 from app.services.completeness_service import (
     evaluate_report_completeness,
@@ -81,9 +88,44 @@ from app.services.report_service import (
     ReportValidationError,
     submit_report as submit_report_service,
 )
+from app.services.smart_report_service import (
+    structure_report_description,
+)
 
 
 router = APIRouter()
+
+
+@router.post(
+    "/smart-structure",
+    response_model=SmartReportStructureResponse,
+)
+async def smart_structure_report(
+    the_report_input: SmartReportStructureRequest,
+    current_observer: CurrentObserver,
+):
+    """
+    Convert an Observer-written description into optional,
+    reviewable report suggestions.
+
+    This endpoint:
+    - accepts description text only
+    - never receives evidence files or precise coordinates
+    - never persists the description or AI output
+    - returns advisory suggestions requiring confirmation
+    - returns an available=false fallback when AI fails
+    """
+
+    await smart_report_limiter.check(
+        key=(
+            "smart-report:"
+            + str(current_observer["user_id"])
+        )
+    )
+
+    return await structure_report_description(
+        the_report_input.description
+    )
 
 
 @router.get(
