@@ -91,6 +91,17 @@ login_limiter = InMemoryRateLimiter(
 )
 
 
+smart_report_limiter = InMemoryRateLimiter(
+    max_requests=(
+        settings.smart_report_rate_limit_requests
+    ),
+    window_seconds=(
+        settings
+        .smart_report_rate_limit_window_seconds
+    ),
+)
+
+
 def get_client_identifier(
     request: Request,
 ) -> str:
