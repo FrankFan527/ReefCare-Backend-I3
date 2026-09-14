@@ -118,7 +118,7 @@ class HotspotQuality(APIModel):
 
 class HotspotMetadata(APIModel):
     count_basis: str = "Individual submitted reports, not distinct or confirmed incidents."
-    location_basis: str = "Named dive site linked through each report's dive session."
+    location_basis: str = "Named dive site linked through each report's dive session. Map anchors are derived from the dive site's reference centre and generalised to 2 decimal places; report_location coordinates are never read by US5.6."
     selection_basis: str = (
         "Exact membership of configured site IDs and area/region labels; "
         "no radius, underwater positioning or point-in-polygon calculation."

@@ -1,7 +1,12 @@
 """Read-only US5.6 SQL over the existing canonical schema.
 
-Never join report_location/evidence or read descriptions, observer identifiers,
-site centre coordinates or assessment notes. Aggregate before returning rows.
+Never join report_location/evidence or read descriptions, observer identifiers
+or assessment notes.
+
+A report's named dive site may supply a site-level reference centre for map
+visualisation. The SQL generalises that centre before it leaves the repository.
+
+Exact report coordinates are never read.
 """
 
 from datetime import datetime, time, timedelta
@@ -23,13 +28,27 @@ SITE_COLUMNS = """
 BASE_CTE = """
 WITH base AS NOT MATERIALIZED (
     SELECT r.report_id, r.report_reference, r.observed_at, r.submitted_at,
-           r.claimed_by_user_id,
-           COALESCE(tc.code, 'unsure') AS threat_code,
-           COALESCE(tc.label, 'Unsure') AS threat_label,
-           cs.code AS status_code, cs.internal_label AS status_label,
-           cs.is_terminal AS is_closed,
-           ds.dive_site_id AS site_id, ds.name AS site_name,
-           ds.public_area_label AS area, ds.region
+            r.claimed_by_user_id,
+            COALESCE(tc.code, 'unsure') AS threat_code,
+            COALESCE(tc.label, 'Unsure') AS threat_label,
+            cs.code AS status_code, cs.internal_label AS status_label,
+            cs.is_terminal AS is_closed,
+            ds.dive_site_id AS site_id,
+            ds.name AS site_name,
+            ds.public_area_label AS area,
+            ds.region,
+            ROUND(
+                ds.centre_latitude,
+                2
+            ) AS map_latitude,
+            ROUND(
+                ds.centre_longitude,
+                2
+            ) AS map_longitude,
+            GREATEST(
+                ds.default_uncertainty_metres,
+                1000
+            ) AS map_uncertainty_metres
     FROM report r
     JOIN case_status cs ON cs.case_status_id = r.current_status_id
     LEFT JOIN threat_category tc ON tc.threat_category_id = r.threat_category_id
@@ -81,11 +100,40 @@ async def get_analysis(db: AsyncSession, filters: HotspotFilters):
     # disagree because a report arrived between separate count/map queries.
     result = await db.execute(text(BASE_CTE + """
     , grouped AS (
-        SELECT site_id, site_name, area, region, threat_code, threat_label,
-               date_trunc(:interval, observed_at AT TIME ZONE :timezone)::date AS bucket,
-               COUNT(*) AS report_count
+        SELECT
+            site_id,
+            site_name,
+            area,
+            region,
+
+            map_latitude,
+            map_longitude,
+            map_uncertainty_metres,
+
+            threat_code,
+            threat_label,
+
+            date_trunc(
+                :interval,
+                observed_at
+                    AT TIME ZONE :timezone
+            )::date AS bucket,
+
+            COUNT(*) AS report_count
         FROM usable
-        GROUP BY site_id, site_name, area, region, threat_code, threat_label, bucket
+        GROUP BY
+            site_id,
+            site_name,
+            area,
+            region,
+
+            map_latitude,
+            map_longitude,
+            map_uncertainty_metres,
+
+            threat_code,
+            threat_label,
+            bucket
     )
     SELECT (SELECT COUNT(*) FROM filtered) AS matching_report_count,
            (SELECT COUNT(*) FROM usable) AS included_report_count,
