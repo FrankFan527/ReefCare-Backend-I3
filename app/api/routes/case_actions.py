@@ -15,15 +15,32 @@
 # database functions are keyed on report_reference and it is the identifier
 # the observer already sees.
 # ---------------------------------------------------------------------------
-from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
-from sqlalchemy.exc import DBAPIError
+from datetime import (
+    datetime,
+    timezone,
+)
 
-from app.api.dependencies.authorization import CurrentCoordinator
-from app.api.dependencies.db import DatabaseSession
+from fastapi import (
+    APIRouter,
+    File,
+    HTTPException,
+    UploadFile,
+    status,
+)
+from sqlalchemy.exc import (
+    DBAPIError,
+)
+
+from app.api.dependencies.authorization import (
+    CurrentCoordinator,
+)
+from app.api.dependencies.db import (
+    DatabaseSession,
+)
 from app.schemas.action import (
     ActionCreate,
+    ActionEvidenceResponse,
     ActionListResponse,
     ActionResponse,
     ActionTypeOption,
@@ -39,14 +56,28 @@ from app.schemas.case import (
     ResponseTypeDecisionResponse,
 )
 from app.services.case_action_service import (
+    attach_evidence_to_action,
     list_action_type_options,
     list_actions_for_owned_case,
     record_action,
 )
-from app.services.case_assessment_service import record_evidence_assessment
-from app.services.case_closure_service import close_case
-from app.services.case_decision_service import record_decision
-from app.services.case_workflow_service import request_more_information
+from app.services.case_assessment_service import (
+    record_evidence_assessment,
+)
+from app.services.case_closure_service import (
+    close_case,
+)
+from app.services.case_decision_service import (
+    record_decision,
+)
+from app.services.case_workflow_service import (
+    request_more_information,
+)
+from app.services.evidence_service import (
+    EvidenceStorageError,
+    EvidenceTooLargeError,
+    EvidenceValidationError,
+)
 
 
 router = APIRouter()
@@ -62,26 +93,40 @@ async def create_information_request(
     current_user: CurrentCoordinator,
     db: DatabaseSession,
 ):
-    """Ask the observer for more information on an owned case."""
+    """
+    Ask the observer for more information on an owned case.
+    """
 
-    # the actor comes from the verified token, never from the request
-    the_coordinator_id = current_user["user_id"]
+    the_coordinator_id = current_user[
+        "user_id"
+    ]
 
-    the_result = await request_more_information(
-        db=db,
-        report_reference=report_reference,
-        coordinator_id=the_coordinator_id,
-        reason=the_request_input.reason,
+    the_result = (
+        await request_more_information(
+            db=db,
+            report_reference=(
+                report_reference
+            ),
+            coordinator_id=(
+                the_coordinator_id
+            ),
+            reason=(
+                the_request_input.reason
+            ),
+        )
     )
 
-    # the status move and its case_event only become permanent here
     await db.commit()
 
     return InformationRequestResponse(
-        report_reference=the_result["report_reference"],
+        report_reference=the_result[
+            "report_reference"
+        ],
         status=the_result["status"],
         reason=the_result["reason"],
-        requested_at=datetime.now(timezone.utc),
+        requested_at=datetime.now(
+            timezone.utc
+        ),
     )
 
 
@@ -95,28 +140,46 @@ async def create_case_decision(
     current_user: CurrentCoordinator,
     db: DatabaseSession,
 ):
-    """Record a response-type decision on an owned case."""
+    """
+    Record a response-type decision on an owned case.
+    """
 
-    # the actor comes from the verified token, never from the request
-    the_coordinator_id = current_user["user_id"]
+    the_coordinator_id = current_user[
+        "user_id"
+    ]
 
     the_result = await record_decision(
         db=db,
         report_reference=report_reference,
         coordinator_id=the_coordinator_id,
-        response_type=the_decision_input.response_type,
-        notes=the_decision_input.notes,
-        referred_to=the_decision_input.referred_to,
+        response_type=(
+            the_decision_input
+            .response_type
+        ),
+        notes=(
+            the_decision_input.notes
+        ),
+        referred_to=(
+            the_decision_input
+            .referred_to
+        ),
     )
 
-    # the decision row only becomes permanent here
     await db.commit()
 
     return ResponseTypeDecisionResponse(
-        report_reference=the_result["report_reference"],
-        response_type=the_result["response_type"],
-        decided_at=the_result["decided_at"],
-        decided_by=the_result["decided_by"],
+        report_reference=the_result[
+            "report_reference"
+        ],
+        response_type=the_result[
+            "response_type"
+        ],
+        decided_at=the_result[
+            "decided_at"
+        ],
+        decided_by=the_result[
+            "decided_by"
+        ],
     )
 
 
@@ -130,42 +193,64 @@ async def close_owned_case(
     current_user: CurrentCoordinator,
     db: DatabaseSession,
 ):
-    """Close a case the coordinator owns, recording the reason."""
+    """
+    Close a case the coordinator owns, recording the
+    selected closure reason.
+    """
 
-    # the actor comes from the verified token, never from the request
-    the_coordinator_id = current_user["user_id"]
+    the_coordinator_id = current_user[
+        "user_id"
+    ]
 
     try:
         the_result = await close_case(
             db=db,
             report_reference=report_reference,
-            coordinator_id=the_coordinator_id,
-            closure_reason_code=the_closure_input.closure_reason_code,
-            public_closure_note=the_closure_input.public_closure_note,
-            referred_to=the_closure_input.referred_to,
+            coordinator_id=(
+                the_coordinator_id
+            ),
+            closure_reason_code=(
+                the_closure_input
+                .closure_reason_code
+            ),
+            public_closure_note=(
+                the_closure_input
+                .public_closure_note
+            ),
+            referred_to=(
+                the_closure_input
+                .referred_to
+            ),
         )
 
-        # The commit sits INSIDE the try on purpose. trg_report_closure_reason
-        # is DEFERRABLE INITIALLY DEFERRED, so a closure that breaks it raises
-        # here rather than at execute(). Committing outside the try would
-        # return 200 for a close that never happened.
         await db.commit()
 
     except DBAPIError as the_error:
-        # A deferred constraint or a database-side ownership check failed at
-        # commit. The detail is deliberately generic: Postgres messages can
-        # name internal columns and are not observer-safe.
         await db.rollback()
+
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="The case could not be closed in its current state",
+            status_code=(
+                status.HTTP_409_CONFLICT
+            ),
+            detail=(
+                "The case could not be "
+                "closed in its current state"
+            ),
         ) from the_error
 
     return CaseClosureResponse(
-        report_reference=the_result["report_reference"],
+        report_reference=the_result[
+            "report_reference"
+        ],
         status=the_result["status"],
-        closure_reason_code=the_result["closure_reason_code"],
-        closed_at=datetime.now(timezone.utc),
+        closure_reason_code=(
+            the_result[
+                "closure_reason_code"
+            ]
+        ),
+        closed_at=datetime.now(
+            timezone.utc
+        ),
     )
 
 
@@ -180,78 +265,117 @@ async def assess_case_evidence(
     db: DatabaseSession,
 ):
     """
-    Record the two evidence questions and move the case accordingly.
-
-    The commit sits inside the try because one of the three outcomes closes the
-    case, and trg_report_closure_reason is DEFERRABLE INITIALLY DEFERRED, so it
-    raises at COMMIT rather than at execute. Committing outside the try would
-    return 200 for a closure that never happened.
+    Record the two evidence questions and move the case
+    accordingly.
     """
 
-    # the actor comes from the verified token, never from the request
-    the_coordinator_id = current_user["user_id"]
+    the_coordinator_id = current_user[
+        "user_id"
+    ]
 
     try:
-        the_result = await record_evidence_assessment(
-            db=db,
-            report_reference=report_reference,
-            coordinator_id=the_coordinator_id,
-            evidence_usable=the_assessment_input.evidence_usable,
-            observation_credible=the_assessment_input.observation_credible,
-            notes=the_assessment_input.notes,
+        the_result = (
+            await record_evidence_assessment(
+                db=db,
+                report_reference=(
+                    report_reference
+                ),
+                coordinator_id=(
+                    the_coordinator_id
+                ),
+                evidence_usable=(
+                    the_assessment_input
+                    .evidence_usable
+                ),
+                observation_credible=(
+                    the_assessment_input
+                    .observation_credible
+                ),
+                notes=(
+                    the_assessment_input
+                    .notes
+                ),
+            )
         )
 
         await db.commit()
 
     except DBAPIError as the_error:
         await db.rollback()
+
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="The evidence assessment could not be recorded in this case's current state",
+            status_code=(
+                status.HTTP_409_CONFLICT
+            ),
+            detail=(
+                "The evidence assessment could not "
+                "be recorded in this case's "
+                "current state"
+            ),
         ) from the_error
 
     return EvidenceAssessmentResponse(
-        report_reference=the_result["report_reference"],
-        evidence_usable=the_result["evidence_usable"],
-        observation_credible=the_result["observation_credible"],
+        report_reference=the_result[
+            "report_reference"
+        ],
+        evidence_usable=the_result[
+            "evidence_usable"
+        ],
+        observation_credible=(
+            the_result[
+                "observation_credible"
+            ]
+        ),
         status=the_result["status"],
-        assessed_at=the_result["assessed_at"],
-        assessed_by=the_result["assessed_by"],
+        assessed_at=the_result[
+            "assessed_at"
+        ],
+        assessed_by=the_result[
+            "assessed_by"
+        ],
     )
 
 
 # ---------------------------------------------------------------------------
 # US7.1 Basic conservation action record.
 #
-# Deliberately small. Section 10.5 of the Iteration 2 backend document is
-# explicit that E7 must not grow into the deferred Iteration 3 monitoring
-# workflow, so there is no update endpoint and no delete endpoint: an action is
-# superseded by recording a later one.
+# E7 remains append-only. There is no action update/delete
+# endpoint in Iteration 2.
 # ---------------------------------------------------------------------------
 
 
 @router.get(
     "/action-types",
-    response_model=list[ActionTypeOption],
+    response_model=list[
+        ActionTypeOption
+    ],
 )
 async def get_action_types(
     current_user: CurrentCoordinator,
     db: DatabaseSession,
 ):
     """
-    Return the action vocabulary a coordinator may currently choose from.
-
-    Read from the action_type reference table rather than a Python constant, so
-    labels can be corrected without a redeploy.
+    Return currently selectable conservation-action
+    reference values.
     """
 
-    the_options = await list_action_type_options(db=db)
+    the_options = (
+        await list_action_type_options(
+            db=db
+        )
+    )
 
     return [
         ActionTypeOption(
-            code=the_option["code"],
-            label=the_option["label"],
-            description=the_option["description"],
+            code=the_option[
+                "code"
+            ],
+            label=the_option[
+                "label"
+            ],
+            description=the_option[
+                "description"
+            ],
         )
         for the_option in the_options
     ]
@@ -260,7 +384,9 @@ async def get_action_types(
 @router.post(
     "/reports/{report_reference}/actions",
     response_model=ActionResponse,
-    status_code=status.HTTP_201_CREATED,
+    status_code=(
+        status.HTTP_201_CREATED
+    ),
 )
 async def create_case_action(
     report_reference: str,
@@ -269,38 +395,62 @@ async def create_case_action(
     db: DatabaseSession,
 ):
     """
-    Record a planned or completed conservation action on an owned case.
-
-    The commit sits inside the try for the same reason as closure and evidence
-    assessment: the action may move the case status, and a transition the
-    database refuses must not return 201 for a row that was rolled back.
+    Record a planned or completed conservation action on
+    an owned case.
     """
 
-    # the actor comes from the verified token, never from the request
-    the_coordinator_id = current_user["user_id"]
+    the_coordinator_id = current_user[
+        "user_id"
+    ]
 
     try:
         the_result = await record_action(
             db=db,
-            report_reference=report_reference,
-            coordinator_id=the_coordinator_id,
-            action_type_code=the_action_input.action_type_code,
-            action_state=the_action_input.action_state.value,
-            action_date=the_action_input.action_date,
-            responsible_team=the_action_input.responsible_team,
-            notes=the_action_input.notes,
+            report_reference=(
+                report_reference
+            ),
+            coordinator_id=(
+                the_coordinator_id
+            ),
+            action_type_code=(
+                the_action_input
+                .action_type_code
+            ),
+            action_state=(
+                the_action_input
+                .action_state.value
+            ),
+            action_date=(
+                the_action_input
+                .action_date
+            ),
+            responsible_team=(
+                the_action_input
+                .responsible_team
+            ),
+            notes=(
+                the_action_input.notes
+            ),
         )
 
         await db.commit()
 
     except DBAPIError as the_error:
         await db.rollback()
+
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="The action could not be recorded in this case's current state",
+            status_code=(
+                status.HTTP_409_CONFLICT
+            ),
+            detail=(
+                "The action could not be recorded "
+                "in this case's current state"
+            ),
         ) from the_error
 
-    return ActionResponse(**the_result)
+    return ActionResponse(
+        **the_result
+    )
 
 
 @router.get(
@@ -313,26 +463,131 @@ async def get_case_actions(
     db: DatabaseSession,
 ):
     """
-    Return every action recorded against an owned case, oldest first.
-
-    Ownership is verified in the service before any detail is returned: an
-    action names a responsible team and describes intended or completed
-    conservation work, which is not queue-safe information.
+    Return every action recorded against an owned case,
+    oldest first.
     """
 
-    the_coordinator_id = current_user["user_id"]
+    the_coordinator_id = current_user[
+        "user_id"
+    ]
 
-    the_actions = await list_actions_for_owned_case(
-        db=db,
-        report_reference=report_reference,
-        coordinator_id=the_coordinator_id,
+    the_actions = (
+        await list_actions_for_owned_case(
+            db=db,
+            report_reference=(
+                report_reference
+            ),
+            coordinator_id=(
+                the_coordinator_id
+            ),
+        )
     )
 
     return ActionListResponse(
         report_reference=report_reference,
         items=[
-            ActionResponse(**the_action)
-            for the_action in the_actions
+            ActionResponse(
+                **the_action
+            )
+            for the_action
+            in the_actions
         ],
-        total=len(the_actions),
+        total=len(
+            the_actions
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# API-11 Action evidence.
+#
+# The upload is deliberately separate from POST /actions.
+#
+# Creating/updating an action remains JSON.
+# Evidence upload remains multipart/form-data.
+#
+# The evidence row links back to the action through the
+# action's case_event_id.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    (
+        "/reports/{report_reference}"
+        "/actions/{action_id}/evidence"
+    ),
+    response_model=ActionEvidenceResponse,
+    status_code=(
+        status.HTTP_201_CREATED
+    ),
+)
+async def upload_action_evidence(
+    report_reference: str,
+    action_id: int,
+    current_user: CurrentCoordinator,
+    db: DatabaseSession,
+    file: UploadFile = File(...),
+):
+    """
+    Attach one private evidence image to an existing
+    conservation action.
+
+    Required protections:
+
+    - coordinator still owns the case
+    - action belongs to the requested report
+    - existing private evidence validation/storage is reused
+    - evidence.case_event_id points to the action event
+    - evidence.uploaded_by_user_id records the actor
+    - private file_reference is never returned
+    - uploading does not change action_state or case status
+    """
+
+    try:
+        the_result = (
+            await attach_evidence_to_action(
+                db=db,
+                report_reference=(
+                    report_reference
+                ),
+                action_id=action_id,
+                coordinator_id=(
+                    current_user[
+                        "user_id"
+                    ]
+                ),
+                photo=file,
+            )
+        )
+
+    except EvidenceTooLargeError as exc:
+        raise HTTPException(
+            status_code=(
+                status
+                .HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            ),
+            detail=str(exc),
+        ) from exc
+
+    except EvidenceValidationError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+            detail=str(exc),
+        ) from exc
+
+    except EvidenceStorageError as exc:
+        raise HTTPException(
+            status_code=(
+                status
+                .HTTP_500_INTERNAL_SERVER_ERROR
+            ),
+            detail=(
+                "Unable to store action evidence"
+            ),
+        ) from exc
+
+    return ActionEvidenceResponse(
+        **the_result
     )

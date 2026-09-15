@@ -1,5 +1,7 @@
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+)
 
 
 async def list_case_evidence_metadata(
@@ -7,10 +9,12 @@ async def list_case_evidence_metadata(
     report_reference: str,
 ):
     """
-    Return safe evidence metadata for case projection.
+    Return safe evidence metadata for the authorised case
+    projection.
 
     file_reference is deliberately excluded because private
-    evidence access is handled separately.
+    evidence access is handled through the protected
+    evidence route.
     """
 
     result = await db.execute(
@@ -25,13 +29,15 @@ async def list_case_evidence_metadata(
             FROM evidence e
 
             JOIN report r
-                ON r.report_id = e.report_id
+                ON r.report_id =
+                   e.report_id
 
             WHERE
                 r.report_reference =
                     :report_reference
 
-                AND r.deleted_at IS NULL
+                AND r.deleted_at
+                    IS NULL
 
             ORDER BY
                 e.display_order,
@@ -39,11 +45,17 @@ async def list_case_evidence_metadata(
             """
         ),
         {
-            "report_reference": report_reference,
+            "report_reference":
+                report_reference,
         },
     )
 
-    return result.mappings().all()
+    return (
+        result
+        .mappings()
+        .all()
+    )
+
 
 async def get_case_evidence(
     db: AsyncSession,
@@ -51,12 +63,14 @@ async def get_case_evidence(
     evidence_id: int,
 ):
     """
-    Return the private storage reference for one
-    evidence item, but only when it belongs to
-    the requested report.
+    Return the private storage reference for one evidence
+    item only when it belongs to the requested report.
 
-    Ownership is checked by the service layer
-    before file_reference is used.
+    Ownership is checked by the service layer before this
+    object key is used.
+
+    case_event_id and uploaded_by_user_id are internal audit
+    metadata only.
     """
 
     result = await db.execute(
@@ -66,13 +80,17 @@ async def get_case_evidence(
                 e.evidence_id,
                 e.media_type,
                 e.file_reference,
+                e.file_size_bytes,
                 e.captured_at,
-                e.uploaded_at
+                e.uploaded_at,
+                e.case_event_id,
+                e.uploaded_by_user_id
 
             FROM evidence e
 
             JOIN report r
-                ON r.report_id = e.report_id
+                ON r.report_id =
+                   e.report_id
 
             WHERE
                 r.report_reference =
@@ -81,7 +99,8 @@ async def get_case_evidence(
                 AND e.evidence_id =
                     :evidence_id
 
-                AND r.deleted_at IS NULL
+                AND r.deleted_at
+                    IS NULL
 
             LIMIT 1
             """
@@ -89,9 +108,14 @@ async def get_case_evidence(
         {
             "report_reference":
                 report_reference,
+
             "evidence_id":
                 evidence_id,
         },
     )
 
-    return result.mappings().first()
+    return (
+        result
+        .mappings()
+        .first()
+    )

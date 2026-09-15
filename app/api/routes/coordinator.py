@@ -15,16 +15,17 @@ from app.schemas.case import (
     CaseOwnerResponse,
     ClaimedCaseResponse,
     CoordinatorCaseResponse,
+    CoordinatorHistoryFilters,
     CoordinatorHistoryItem,
     CoordinatorHistoryResponse,
     CoordinatorQueueResponse,
+    HistoryCodeLabel,
     ReferralHistoryEntry,
     StartReviewResponse,
 )
 from app.services.case_history_service import (
     get_closed_case_history,
 )
-
 from app.services.case_ownership_service import (
     claim_report as claim_report_service,
 )
@@ -55,6 +56,7 @@ async def get_queue(
         default=20,
         ge=1,
         le=100,
+        alias="pageSize",
     ),
 ):
     """
@@ -177,6 +179,9 @@ async def get_case(
     The service verifies that the authenticated coordinator
     currently owns the case before sensitive information is
     returned.
+
+    Terminal cases remain readable by their current owner,
+    which supports closed-case history drill-through.
     """
 
     coordinator_id = current_coordinator[
@@ -190,17 +195,15 @@ async def get_case(
     )
 
 
-
 # ---------------------------------------------------------------------------
-# US5.8 Closed case and referral history.
+# US5.8 / API-10 Closed case and referral history.
 #
-# Registered on /cases/history rather than under /reports, because it returns a
-# filtered set rather than one report. It cannot collide with
-# /reports/{report_reference}: the path segments differ.
+# Registered on /cases/history because this route returns a
+# filtered collection rather than one report.
 #
-# Ownership is enforced inside the repository query rather than here. There is
-# no single case to check, so both queries filter on claimed_by_user_id and a
-# case the coordinator does not own is never selected in the first place.
+# Ownership is enforced inside the repository query:
+# report.claimed_by_user_id must match the authenticated
+# coordinator.
 # ---------------------------------------------------------------------------
 
 
@@ -213,6 +216,7 @@ async def get_case_history(
     db: DatabaseSession,
     closure_reason: str | None = Query(
         default=None,
+        alias="closureReason",
         description=(
             "Filter by closure_reason.code, for example "
             "referred_other_org"
@@ -220,6 +224,7 @@ async def get_case_history(
     ),
     threat_category: str | None = Query(
         default=None,
+        alias="threatCategory",
         description=(
             "Filter by threat_category.code, for example "
             "ghost_gear"
@@ -227,21 +232,24 @@ async def get_case_history(
     ),
     closed_from: datetime | None = Query(
         default=None,
+        alias="closedFrom",
         description=(
             "Only cases closed on or after this time"
         ),
     ),
     closed_to: datetime | None = Query(
         default=None,
+        alias="closedTo",
         description=(
             "Only cases closed strictly before this time"
         ),
     ),
     was_referred: bool | None = Query(
         default=None,
+        alias="wasReferred",
         description=(
             "true returns only cases with a recorded "
-            "referral, false only those without"
+            "referral; false only cases without one"
         ),
     ),
     page: int = Query(
@@ -252,29 +260,28 @@ async def get_case_history(
         default=20,
         ge=1,
         le=100,
+        alias="pageSize",
     ),
 ):
     """
-    Return the coordinator's own closed cases, newest closure first.
+    Return the authenticated coordinator's own closed cases.
 
-    US5.8 AC1 makes filtering the way a coordinator reaches their history, so
-    every filter is optional and absent means unfiltered rather than empty.
+    All filters are optional.
 
-    No owner filter. The endpoint is already scoped to the authenticated
-    coordinator, so the parameter could only do nothing or widen access.
+    No owner parameter is accepted. The authenticated
+    coordinator identity is always taken from the verified
+    token.
 
-    Read only: no commit, and nothing here writes.
+    This route is read only.
     """
 
-    # the coordinator comes from the verified token, never from a query
-    # parameter
-    the_coordinator_id = current_coordinator[
+    coordinator_id = current_coordinator[
         "user_id"
     ]
 
-    the_history = await get_closed_case_history(
+    history = await get_closed_case_history(
         db=db,
-        coordinator_id=the_coordinator_id,
+        coordinator_id=coordinator_id,
         closure_reason_code=closure_reason,
         threat_code=threat_category,
         closed_from=closed_from,
@@ -284,61 +291,102 @@ async def get_case_history(
         page_size=page_size,
     )
 
-    the_items = [
-        CoordinatorHistoryItem(
-            report_reference=the_item[
-                "report_reference"
-            ],
-            threat=the_item["threat"],
-            area=the_item["area"],
-            status_code=the_item[
-                "status_code"
-            ],
-            status_label=the_item[
-                "status_label"
-            ],
-            submitted_at=the_item[
-                "submitted_at"
-            ],
-            closed_at=the_item["closed_at"],
-            closure_reason_code=the_item[
-                "closure_reason_code"
-            ],
-            closure_reason_label=the_item[
-                "closure_reason_label"
-            ],
-            closure_note=the_item[
-                "closure_note"
-            ],
-            referrals=[
-                ReferralHistoryEntry(
-                    referred_to=the_referral[
-                        "referred_to"
+    items = []
+
+    for item in history["items"]:
+        closure_reason_model = None
+
+        if (
+            item["closure_reason_code"]
+            is not None
+        ):
+            closure_reason_model = (
+                HistoryCodeLabel(
+                    code=item[
+                        "closure_reason_code"
                     ],
-                    decided_at=the_referral[
-                        "decided_at"
-                    ],
-                    note=the_referral[
-                        "decision_note"
-                    ],
-                    decided_by_name=the_referral[
-                        "decided_by_name"
+                    label=item[
+                        "closure_reason_label"
                     ],
                 )
-                for the_referral in the_item[
-                    "referrals"
-                ]
-            ],
+            )
+
+        items.append(
+            CoordinatorHistoryItem(
+                report_reference=item[
+                    "report_reference"
+                ],
+                threat_category=(
+                    HistoryCodeLabel(
+                        code=item[
+                            "threat_code"
+                        ],
+                        label=item[
+                            "threat"
+                        ],
+                    )
+                ),
+                general_location=item[
+                    "area"
+                ],
+                status=HistoryCodeLabel(
+                    code=item[
+                        "status_code"
+                    ],
+                    label=item[
+                        "status_label"
+                    ],
+                ),
+                submitted_at=item[
+                    "submitted_at"
+                ],
+                closed_at=item[
+                    "closed_at"
+                ],
+                closure_reason=(
+                    closure_reason_model
+                ),
+                closure_note=item[
+                    "closure_note"
+                ],
+                was_referred=item[
+                    "was_referred"
+                ],
+                referrals=[
+                    ReferralHistoryEntry(
+                        referred_to=referral[
+                            "referred_to"
+                        ],
+                        referred_at=referral[
+                            "referred_at"
+                        ],
+                        note=referral[
+                            "decision_note"
+                        ],
+                        decided_by_name=(
+                            referral[
+                                "decided_by_name"
+                            ]
+                        ),
+                    )
+                    for referral
+                    in item["referrals"]
+                ],
+            )
         )
-        for the_item in the_history["items"]
-    ]
 
     return CoordinatorHistoryResponse(
-        items=the_items,
-        page=the_history["page"],
-        page_size=the_history["page_size"],
-        total=the_history["total"],
-        filters_applied=the_history[
-            "filters_applied"
+        items=items,
+        page=history["page"],
+        page_size=history[
+            "page_size"
         ],
+        total=history["total"],
+        applied_filters=(
+            CoordinatorHistoryFilters(
+                **history[
+                    "applied_filters"
+                ]
+            )
+        ),
     )

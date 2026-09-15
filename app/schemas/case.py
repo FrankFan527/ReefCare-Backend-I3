@@ -11,14 +11,15 @@ from app.core.enums import CaseStatus
 from app.schemas.common import APIModel
 
 
-class EvidenceCompleteness(str, Enum):
+class EvidenceCompleteness(
+    str,
+    Enum,
+):
     """
-    US5.1 AC1 evidence-completeness indicator.
+    US5.1 evidence-completeness indicator.
 
-    Computed on read, never stored. These are API vocabulary rather than
-    database codes, which is why they sit here beside the queue item and not
-    in core/enums.py, where every value is documented as matching a column
-    in PostgreSQL.
+    This is computed on read and is not a PostgreSQL
+    persisted vocabulary.
     """
 
     COMPLETE = "complete"
@@ -26,12 +27,15 @@ class EvidenceCompleteness(str, Enum):
     MINIMAL = "minimal"
 
 
-class CasePriority(str, Enum):
+class CasePriority(
+    str,
+    Enum,
+):
     """
-    US5.7 priority cue. Also computed, also never stored.
+    US5.7 priority cue.
 
-    A cue, not a verdict. US5.7 AC3 requires that it never verifies the
-    threat, closes the case or makes the conservation decision.
+    This is guidance only and does not verify the threat or
+    mutate the workflow.
     """
 
     HIGH = "high"
@@ -49,15 +53,16 @@ class CoordinatorQueueItem(APIModel):
     Queue-safe representation of one active submitted
     report.
 
-    The queue contains only generalised location and
-    ownership information. It never exposes precise
-    coordinates or private evidence.
+    Precise coordinates and private evidence are excluded.
     """
 
     report_reference: str
 
     threat: str
-    area: str | None = None
+
+    area: (
+        str | None
+    ) = None
 
     status_code: CaseStatus
     status_label: str
@@ -65,25 +70,31 @@ class CoordinatorQueueItem(APIModel):
     submitted_at: datetime
     hours_in_queue: int
 
-    # US5.1 AC1: how much of this report can actually be
-    # reviewed. evidence_count sits beside the indicator so
-    # a coordinator can see the number behind the word.
-    evidence_completeness: EvidenceCompleteness
+    evidence_completeness: (
+        EvidenceCompleteness
+    )
+
     evidence_count: int
 
-    # US5.7: the cue, and the rules that produced it. The
-    # reasons are not decoration. AC2 asks for a priority
-    # the coordinator can understand, and a bare band tells
-    # them the conclusion without the reasoning.
     priority: CasePriority
-    priority_reasons: list[str]
 
-    owner: CaseOwnerResponse | None = None
-    claimed_at: datetime | None = None
+    priority_reasons: list[
+        str
+    ]
+
+    owner: (
+        CaseOwnerResponse | None
+    ) = None
+
+    claimed_at: (
+        datetime | None
+    ) = None
 
 
 class CoordinatorQueueResponse(APIModel):
-    items: list[CoordinatorQueueItem]
+    items: list[
+        CoordinatorQueueItem
+    ]
 
     page: int
     page_size: int
@@ -112,21 +123,39 @@ class StartReviewResponse(APIModel):
 
 
 class PreciseLocationResponse(APIModel):
-    latitude: float | None = None
-    longitude: float | None = None
+    latitude: (
+        float | None
+    ) = None
 
-    uncertainty_metres: int | None = None
-    confidence_label: str | None = None
-    source_label: str | None = None
+    longitude: (
+        float | None
+    ) = None
 
-    relocation_notes: str | None = None
+    uncertainty_metres: (
+        int | None
+    ) = None
+
+    confidence_label: (
+        str | None
+    ) = None
+
+    source_label: (
+        str | None
+    ) = None
+
+    relocation_notes: (
+        str | None
+    ) = None
 
 
 class EvidenceSummary(APIModel):
     evidence_id: int
     media_type: str
 
-    captured_at: datetime | None = None
+    captured_at: (
+        datetime | None
+    ) = None
+
     uploaded_at: datetime
 
 
@@ -134,77 +163,83 @@ class LatestDecisionResponse(APIModel):
     """
     Latest persisted US5.4 response decision.
 
-    This deliberately excludes evidence-assessment-only
-    and terminal closure records.
+    Evidence-assessment and terminal-closure-only rows are
+    excluded by the repository.
     """
 
     response_type: str
-    notes: str | None = None
-    referred_to: str | None = None
+
+    notes: (
+        str | None
+    ) = None
+
+    referred_to: (
+        str | None
+    ) = None
+
     decided_at: datetime
 
 
 class CaseTriageContext(APIModel):
     """
-    US5.2 AC3: why this case sits where it does in the queue.
-
-    The same values the queue shows, produced by the same rules in
-    triage_priority_service. Recomputing them here rather than carrying them
-    over from the queue item is what keeps the two views from disagreeing: a
-    case cannot show one priority in the list and a different one when opened.
-
-    All computed on read. Nothing here is persisted.
+    Queue/case-detail triage information produced from the
+    same deterministic backend rules.
     """
 
-    evidence_completeness: EvidenceCompleteness
+    evidence_completeness: (
+        EvidenceCompleteness
+    )
+
     evidence_count: int
 
     priority: CasePriority
-    priority_reasons: list[str]
+
+    priority_reasons: list[
+        str
+    ]
 
     hours_in_queue: int
 
 
 class AIAssistedContext(APIModel):
     """
-    US5.2 AC2: AI output, kept structurally apart from everything else.
-
-    The separation is the point. Observer-confirmed information sits in the
-    report fields, Coordinator-confirmed findings sit in latestDecision, and
-    anything a model produced lives only in here. A coordinator reading the
-    response can tell which is which without knowing how any of it was
-    generated, and nothing in this block is presented as verification.
-
-    Null throughout Iteration 2 until US5.6 is built. The contract exists now
-    so the AI work can fill it without renegotiating the response shape, and so
-    the frontend can build the separated display before the model arrives.
+    AI output remains structurally separate from Observer
+    statements and Coordinator decisions.
     """
 
-    triage_brief: str | None = None
-    generated_at: datetime | None = None
+    triage_brief: (
+        str | None
+    ) = None
 
-    # Always present and always true while this block is non-null. A flag the
-    # frontend has to read is harder to forget than a convention it has to
-    # remember.
-    is_unverified_ai_output: bool = True
+    generated_at: (
+        datetime | None
+    ) = None
+
+    is_unverified_ai_output: (
+        bool
+    ) = True
 
 
 class InformationExchangeEntry(APIModel):
     """
-    One turn in the US5.3 / US6.3 information loop.
-
-    Requests and responses are returned in one ordered list rather than two,
-    because what the coordinator needs to re-review is the conversation: the
-    answer means little without the question directly above it.
+    One information-request/response interaction.
     """
 
     event_type: str
-    message: str | None = None
+
+    message: (
+        str | None
+    ) = None
 
     occurred_at: datetime
 
-    actor_user_id: int | None = None
-    actor_display_name: str | None = None
+    actor_user_id: (
+        int | None
+    ) = None
+
+    actor_display_name: (
+        str | None
+    ) = None
 
 
 class CoordinatorCaseResponse(APIModel):
@@ -215,13 +250,17 @@ class CoordinatorCaseResponse(APIModel):
     threat: str
     description: str
 
-    # Actual observation time.
-    # Nullable for legitimate legacy records.
-    observed_at: datetime | None
+    observed_at: (
+        datetime | None
+    )
 
-    estimated_depth_metres: float | None = None
+    estimated_depth_metres: (
+        float | None
+    ) = None
 
-    area: str | None = None
+    area: (
+        str | None
+    ) = None
 
     precise_location: (
         PreciseLocationResponse | None
@@ -234,34 +273,33 @@ class CoordinatorCaseResponse(APIModel):
 
     owner: CaseOwnerResponse
 
-    evidence: list[EvidenceSummary]
+    evidence: list[
+        EvidenceSummary
+    ]
 
-    # Null until a US5.4 response decision has been saved.
     latest_decision: (
         LatestDecisionResponse | None
     ) = None
 
-    # US5.2 AC3. Always present: every case has an age and a
-    # completeness, even if the answer is "nothing yet".
-    triage_context: CaseTriageContext
+    triage_context: (
+        CaseTriageContext
+    )
 
-    # US5.2 AC2. Null until US5.6 exists. Kept as its own
-    # block so AI output can never be mistaken for an
-    # Observer statement or a Coordinator finding.
-    ai_assisted: AIAssistedContext | None = None
+    ai_assisted: (
+        AIAssistedContext | None
+    ) = None
 
-    # US6.3 AC4. Empty list when nothing has been asked.
-    information_exchange: list[InformationExchangeEntry] = []
+    information_exchange: list[
+        InformationExchangeEntry
+    ] = Field(
+        default_factory=list
+    )
 
 
 class InformationRequestCreate(APIModel):
     """
-    The coordinator's reason for asking the observer for
-    more information.
-
-    Iteration 1 has no separate information_request table.
-    The reason is written into case_event.note by
-    reefcare_change_status().
+    Coordinator reason for asking the Observer for more
+    information.
     """
 
     reason: str = Field(
@@ -279,20 +317,20 @@ class InformationRequestCreate(APIModel):
             the_value.strip()
         )
 
-        if the_trimmed_reason == "":
+        if (
+            the_trimmed_reason
+            == ""
+        ):
             raise ValueError(
                 "reason must not be empty"
             )
 
-        return the_trimmed_reason
+        return (
+            the_trimmed_reason
+        )
 
 
 class InformationRequestResponse(APIModel):
-    """
-    Confirmation that the case moved to
-    needs_more_info.
-    """
-
     report_reference: str
     status: str
     reason: str
@@ -301,23 +339,28 @@ class InformationRequestResponse(APIModel):
 
 class ResponseTypeDecisionCreate(APIModel):
     """
-    A coordinator's Iteration 1 response-type decision
-    on an owned case.
+    Coordinator US5.4 response decision.
     """
 
     response_type: str
 
-    notes: str | None = Field(
+    notes: (
+        str | None
+    ) = Field(
         default=None,
         max_length=1000,
     )
 
-    referred_to: str | None = Field(
+    referred_to: (
+        str | None
+    ) = Field(
         default=None,
         max_length=200,
     )
 
-    @field_validator("response_type")
+    @field_validator(
+        "response_type"
+    )
     @classmethod
     def response_type_must_be_a_database_value(
         cls,
@@ -331,7 +374,8 @@ class ResponseTypeDecisionCreate(APIModel):
 
         if (
             the_value
-            not in the_permitted_response_types
+            not in
+            the_permitted_response_types
         ):
             raise ValueError(
                 "response_type must be one of: "
@@ -344,7 +388,9 @@ class ResponseTypeDecisionCreate(APIModel):
 
         return the_value
 
-    @model_validator(mode="after")
+    @model_validator(
+        mode="after"
+    )
     def referral_must_name_the_recipient(
         self,
     ):
@@ -353,8 +399,10 @@ class ResponseTypeDecisionCreate(APIModel):
             == "refer_or_share"
         ):
             if (
-                self.referred_to is None
-                or self.referred_to.strip()
+                self.referred_to
+                is None
+                or self.referred_to
+                .strip()
                 == ""
             ):
                 raise ValueError(
@@ -366,11 +414,9 @@ class ResponseTypeDecisionCreate(APIModel):
         return self
 
 
-class ResponseTypeDecisionResponse(APIModel):
-    """
-    Confirmation that a decision was recorded.
-    """
-
+class ResponseTypeDecisionResponse(
+    APIModel
+):
     report_reference: str
     response_type: str
     decided_at: datetime
@@ -380,16 +426,29 @@ class ResponseTypeDecisionResponse(APIModel):
 class CaseClosureCreate(APIModel):
     """
     What a coordinator supplies to close a case.
+
+    Closure vocabulary is now database-owned through
+    closure_reason.is_selectable.
+
+    Python therefore no longer hardcodes the old Iteration
+    1 list.
     """
 
-    closure_reason_code: str
+    closure_reason_code: str = Field(
+        min_length=1,
+        max_length=100,
+    )
 
-    public_closure_note: str | None = Field(
+    public_closure_note: (
+        str | None
+    ) = Field(
         default=None,
         max_length=1000,
     )
 
-    referred_to: str | None = Field(
+    referred_to: (
+        str | None
+    ) = Field(
         default=None,
         max_length=200,
     )
@@ -398,90 +457,94 @@ class CaseClosureCreate(APIModel):
         "closure_reason_code"
     )
     @classmethod
-    def closure_reason_must_be_iteration_one(
+    def closure_reason_must_not_be_blank(
         cls,
         the_value: str,
     ) -> str:
-        the_iteration_one_reasons = {
-            "referred_other_org",
-            "monitored_no_action",
-            "not_substantiated",
-            "no_responsible_partner",
-            "logged_for_reference",
-        }
+        the_trimmed_value = (
+            the_value.strip()
+        )
 
         if (
-            the_value
-            not in the_iteration_one_reasons
+            the_trimmed_value
+            == ""
         ):
             raise ValueError(
-                "closure_reason_code must "
-                "be one of: "
-                + ", ".join(
-                    sorted(
-                        the_iteration_one_reasons
-                    )
-                )
+                "closure_reason_code "
+                "must not be empty"
             )
 
-        return the_value
+        return (
+            the_trimmed_value
+        )
 
 
 class CaseClosureResponse(APIModel):
-    """
-    Confirmation that a case was closed.
-    """
-
     report_reference: str
     status: str
+
     closure_reason_code: str
+
     closed_at: datetime
 
 
 class EvidenceAssessmentCreate(APIModel):
     """
-    A coordinator's answers to the two evidence
-    questions (US5.3).
+    Coordinator answers to the two evidence questions.
     """
 
     evidence_usable: bool
-    observation_credible: bool | None = None
 
-    notes: str | None = Field(
+    observation_credible: (
+        bool | None
+    ) = None
+
+    notes: (
+        str | None
+    ) = Field(
         default=None,
         max_length=1000,
     )
 
-    related_report_state: str | None = None
-    related_report_reference: str | None = None
+    related_report_state: (
+        str | None
+    ) = None
 
-    @model_validator(mode="after")
+    related_report_reference: (
+        str | None
+    ) = None
+
+    @model_validator(
+        mode="after"
+    )
     def credibility_is_required_when_evidence_is_usable(
         self,
     ):
         if (
             self.evidence_usable
-            and self.observation_credible
+            and
+            self.observation_credible
             is None
         ):
             raise ValueError(
-                "observation_credible is required "
-                "when evidence_usable is true"
+                "observation_credible is "
+                "required when "
+                "evidence_usable is true"
             )
 
         return self
 
 
-class EvidenceAssessmentResponse(APIModel):
-    """
-    Confirmation that an assessment was recorded,
-    and where it moved the case.
-    """
-
+class EvidenceAssessmentResponse(
+    APIModel
+):
     report_reference: str
 
     evidence_usable: bool
-    observation_credible: bool | None = None
+
+    observation_credible: (
+        bool | None
+    ) = None
 
     status: str
 
@@ -489,61 +552,116 @@ class EvidenceAssessmentResponse(APIModel):
     assessed_by: int
 
 
+# ---------------------------------------------------------------------------
+# API-10 Closed-case history schemas.
+# ---------------------------------------------------------------------------
+
+
+class HistoryCodeLabel(APIModel):
+    """
+    Stable database code plus human-readable label.
+    """
+
+    code: str
+    label: str
+
 
 class ReferralHistoryEntry(APIModel):
-
-
     referred_to: str
-    decided_at: datetime
+    referred_at: datetime
 
-    note: str | None = None
-    decided_by_name: str | None = None
+    note: (
+        str | None
+    ) = None
+
+    decided_by_name: (
+        str | None
+    ) = None
 
 
 class CoordinatorHistoryItem(APIModel):
     """
-    One closed case in the coordinator's own history.
+    One closed case belonging to the authenticated
+    coordinator.
 
-    closure_reason_code may be null. A case reaches a terminal status through
-    reefcare_change_status(), and only the decision path records a reason, so a
-    case closed by another route has a closed status and no stored reason.
-    Returning null says that honestly rather than inventing a reason to fill
-    the field.
+    Only public/generalised location is returned.
     """
 
     report_reference: str
 
-    threat: str
-    area: str | None = None
+    threat_category: (
+        HistoryCodeLabel
+    )
 
-    status_code: CaseStatus
-    status_label: str
+    general_location: (
+        str | None
+    ) = None
+
+    status: HistoryCodeLabel
 
     submitted_at: datetime
-    closed_at: datetime | None = None
 
-    closure_reason_code: str | None = None
-    closure_reason_label: str | None = None
-    closure_note: str | None = None
+    closed_at: (
+        datetime | None
+    ) = None
 
-    # US5.8 AC3. Empty when the case was never referred.
-    referrals: list[ReferralHistoryEntry] = []
+    closure_reason: (
+        HistoryCodeLabel | None
+    ) = None
+
+    closure_note: (
+        str | None
+    ) = None
+
+    was_referred: bool
+
+    referrals: list[
+        ReferralHistoryEntry
+    ] = Field(
+        default_factory=list
+    )
 
 
-class CoordinatorHistoryResponse(APIModel):
+class CoordinatorHistoryFilters(
+    APIModel
+):
+    closure_reason: (
+        str | None
+    ) = None
+
+    threat_category: (
+        str | None
+    ) = None
+
+    closed_from: (
+        datetime | None
+    ) = None
+
+    closed_to: (
+        datetime | None
+    ) = None
+
+    was_referred: (
+        bool | None
+    ) = None
+
+
+class CoordinatorHistoryResponse(
+    APIModel
+):
     """
-    A filtered page of the coordinator's closed cases.
-
-    filters_applied echoes back what the query actually ran with. US5.8 AC1
-    makes filtering the way a coordinator reaches their history, so a page of
-    results is ambiguous without it: three results could mean three matches or
-    a filter that silently did not apply.
+    Filtered, paginated coordinator-owned closed-case
+    history.
     """
 
-    items: list[CoordinatorHistoryItem]
+    items: list[
+        CoordinatorHistoryItem
+    ]
 
     page: int
     page_size: int
     total: int
 
-    filters_applied: dict
+    applied_filters: (
+        CoordinatorHistoryFilters
+    )

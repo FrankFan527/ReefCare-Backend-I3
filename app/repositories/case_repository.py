@@ -1,5 +1,7 @@
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+)
 
 
 async def claim_report(
@@ -21,19 +23,25 @@ async def claim_report(
     result = await db.execute(
         text(
             """
-            SELECT reefcare_claim_report(
-                :report_reference,
-                :coordinator_id
-            )
+            SELECT
+                reefcare_claim_report(
+                    :report_reference,
+                    :coordinator_id
+                )
             """
         ),
         {
-            "report_reference": report_reference,
-            "coordinator_id": coordinator_id,
+            "report_reference":
+                report_reference,
+
+            "coordinator_id":
+                coordinator_id,
         },
     )
 
-    return result.scalar_one()
+    return (
+        result.scalar_one()
+    )
 
 
 async def get_report_owner(
@@ -54,8 +62,11 @@ async def get_report_owner(
 
                 u.display_name,
 
-                cs.code AS status_code,
-                cs.internal_label AS status_label
+                cs.code
+                    AS status_code,
+
+                cs.internal_label
+                    AS status_label
 
             FROM report r
 
@@ -71,15 +82,21 @@ async def get_report_owner(
                 r.report_reference =
                     :report_reference
 
-                AND r.deleted_at IS NULL
+                AND r.deleted_at
+                    IS NULL
             """
         ),
         {
-            "report_reference": report_reference,
+            "report_reference":
+                report_reference,
         },
     )
 
-    return result.mappings().first()
+    return (
+        result
+        .mappings()
+        .first()
+    )
 
 
 async def get_case(
@@ -93,8 +110,8 @@ async def get_case(
     observed_at is the actual observation timestamp and
     must remain distinct from submitted_at.
 
-    Ownership must be checked by the service before the
-    result is exposed externally.
+    Ownership must be checked by the service before this
+    result is externally exposed.
     """
 
     result = await db.execute(
@@ -104,22 +121,24 @@ async def get_case(
                 r.report_reference,
                 r.observer_id,
 
-                tc.label AS threat,
+                tc.label
+                    AS threat,
 
-                -- US5.2 AC3: the code drives the same
-                -- triage rules the queue uses, so a case
-                -- never shows one priority in the list and
-                -- a different one when opened
-                tc.code AS threat_code,
+                tc.code
+                    AS threat_code,
 
                 r.description,
                 r.observed_at,
                 r.estimated_depth_metres,
 
-                ds.public_area_label AS area,
+                ds.public_area_label
+                    AS area,
 
-                cs.code AS status_code,
-                cs.internal_label AS status_label,
+                cs.code
+                    AS status_code,
+
+                cs.internal_label
+                    AS status_label,
 
                 r.submitted_at,
 
@@ -135,27 +154,39 @@ async def get_case(
                     AS INTEGER
                 ) AS hours_in_queue,
 
-                COALESCE(ev.evidence_count, 0)
-                    AS evidence_count,
+                COALESCE(
+                    ev.evidence_count,
+                    0
+                ) AS evidence_count,
 
                 (
-                    rl.report_location_id IS NOT NULL
+                    rl.report_location_id
+                        IS NOT NULL
+
                     AND (
-                        rl.latitude IS NOT NULL
+                        rl.latitude
+                            IS NOT NULL
+
                         OR COALESCE(
-                            BTRIM(rl.relocation_notes),
+                            BTRIM(
+                                rl.relocation_notes
+                            ),
                             ''
                         ) <> ''
                     )
                 ) AS has_location_detail,
 
-                LENGTH(BTRIM(r.description))
-                    AS description_length,
+                LENGTH(
+                    BTRIM(
+                        r.description
+                    )
+                ) AS description_length,
 
                 r.claimed_by_user_id,
                 r.claimed_at,
 
-                u.display_name AS claimed_by
+                u.display_name
+                    AS claimed_by
 
             FROM report r
 
@@ -184,24 +215,37 @@ async def get_case(
                    r.report_location_id
 
             LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS evidence_count
+                SELECT
+                    COUNT(*)
+                        AS evidence_count
+
                 FROM evidence e
-                WHERE e.report_id = r.report_id
-            ) ev ON TRUE
+
+                WHERE
+                    e.report_id =
+                        r.report_id
+            ) ev
+                ON TRUE
 
             WHERE
                 r.report_reference =
                     :report_reference
 
-                AND r.deleted_at IS NULL
+                AND r.deleted_at
+                    IS NULL
             """
         ),
         {
-            "report_reference": report_reference,
+            "report_reference":
+                report_reference,
         },
     )
 
-    return result.mappings().first()
+    return (
+        result
+        .mappings()
+        .first()
+    )
 
 
 async def change_status(
@@ -209,52 +253,59 @@ async def change_status(
     report_reference: str,
     status_code: str,
     actor_user_id: int,
-    note: str | None = None,
-    event_type: str = "status_change",
+    note: (
+        str | None
+    ) = None,
+    event_type: str = (
+        "status_change"
+    ),
 ):
     """
-    Request a normal workflow transition through the
-    sanctioned PostgreSQL function.
+    Request a workflow transition through the canonical
+    PostgreSQL function.
 
-    PostgreSQL remains authoritative for transition validity
-    and case_event creation.
-
-    event_type defaults to "status_change" so existing callers are
-    unaffected. The information-request endpoint passes "info_requested"
-    so the move shows in the observer timeline as a request for more
-    information rather than a generic status change.
+    PostgreSQL remains authoritative for transition
+    validity and case_event creation.
     """
 
     result = await db.execute(
         text(
             """
-            SELECT reefcare_change_status(
-                :report_reference,
-                :status_code,
-                :actor_user_id,
-                :note,
-                :event_type
-            )
+            SELECT
+                reefcare_change_status(
+                    :report_reference,
+                    :status_code,
+                    :actor_user_id,
+                    :note,
+                    :event_type
+                )
             """
         ),
         {
-            "report_reference": report_reference,
-            "status_code": status_code,
-            "actor_user_id": actor_user_id,
-            "note": note,
-            "event_type": event_type,
+            "report_reference":
+                report_reference,
+
+            "status_code":
+                status_code,
+
+            "actor_user_id":
+                actor_user_id,
+
+            "note":
+                note,
+
+            "event_type":
+                event_type,
         },
     )
 
-    return result.scalar_one()
+    return (
+        result.scalar_one()
+    )
 
 
 # ---------------------------------------------------------------------------
-# Closure support (US5.5).
-#
-# Ownership for the information-request and decision endpoints is checked in
-# case_workflow_service via get_report_owner above; reefcare_change_status()
-# does not check it. reefcare_close_report() does check ownership itself.
+# Closure support.
 # ---------------------------------------------------------------------------
 
 
@@ -264,37 +315,50 @@ async def transition_is_permitted(
     to_status_code: str,
 ) -> bool:
     """
-    Whether case_status_transition allows this move.
+    Whether case_status_transition allows the requested
+    transition.
 
-    An application pre-check only. PostgreSQL rejects an unlisted transition
-    regardless, but asking first lets the route return a 409 naming both
-    states instead of surfacing a raw exception.
-
-    Reading the table rather than hardcoding a list means this stays correct
-    if the permitted transitions change.
+    This is an application pre-check only. PostgreSQL
+    remains authoritative.
     """
 
-    the_transition_result = await db.execute(
-        text(
-            """
-            SELECT 1
-            FROM case_status_transition AS t
-            JOIN case_status AS f
-                ON f.case_status_id = t.from_status_id
-            JOIN case_status AS s
-                ON s.case_status_id = t.to_status_id
-            WHERE f.code = :from_status_code
-              AND s.code = :to_status_code
-            """
-        ),
-        {
-            "from_status_code": from_status_code,
-            "to_status_code": to_status_code,
-        },
+    the_transition_result = (
+        await db.execute(
+            text(
+                """
+                SELECT 1
+
+                FROM case_status_transition AS t
+
+                JOIN case_status AS f
+                    ON f.case_status_id =
+                       t.from_status_id
+
+                JOIN case_status AS s
+                    ON s.case_status_id =
+                       t.to_status_id
+
+                WHERE
+                    f.code =
+                        :from_status_code
+
+                    AND s.code =
+                        :to_status_code
+                """
+            ),
+            {
+                "from_status_code":
+                    from_status_code,
+
+                "to_status_code":
+                    to_status_code,
+            },
+        )
     )
 
     return (
-        the_transition_result.first()
+        the_transition_result
+        .first()
         is not None
     )
 
@@ -304,30 +368,40 @@ async def get_closure_reason(
     closure_reason_code: str,
 ) -> dict | None:
     """
-    Return a closure reason's rules, or None if the code is unknown.
+    Return one closure reason's rules.
 
-    requires_note and iteration_added are read rather than hardcoded, so the
-    reference data stays the single source of truth.
+    requires_note and is_selectable come from the
+    database reference table.
+
+    iteration_added is retained only as descriptive
+    metadata and is no longer used by Python to decide
+    whether the reason may be selected.
     """
 
-    the_reason_result = await db.execute(
-        text(
-            """
-            SELECT
-                code,
-                internal_label,
-                observer_label,
-                requires_note,
-                iteration_added
-            FROM closure_reason
-            WHERE code =
-                :closure_reason_code
-            """
-        ),
-        {
-            "closure_reason_code":
-                closure_reason_code
-        },
+    the_reason_result = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    code,
+                    internal_label,
+                    observer_label,
+                    requires_note,
+                    iteration_added,
+                    is_selectable
+
+                FROM closure_reason
+
+                WHERE
+                    code =
+                        :closure_reason_code
+                """
+            ),
+            {
+                "closure_reason_code":
+                    closure_reason_code,
+            },
+        )
     )
 
     the_reason_row = (
@@ -339,7 +413,9 @@ async def get_closure_reason(
     if the_reason_row is None:
         return None
 
-    return dict(the_reason_row)
+    return dict(
+        the_reason_row
+    )
 
 
 async def close_report(
@@ -348,46 +424,63 @@ async def close_report(
     coordinator_id: int,
     closure_reason_code: str,
     terminal_status_code: str,
-    note: str | None = None,
-    referred_to: str | None = None,
+    note: (
+        str | None
+    ) = None,
+    referred_to: (
+        str | None
+    ) = None,
 ) -> str:
     """
-    Close a case through the only sanctioned path.
+    Close a case through the canonical database function.
 
-    reefcare_close_report() writes the case_decision row and
-    terminal status together and enforces coordinator
-    ownership.
+    reefcare_close_report():
+
+    - enforces owner identity
+    - writes case_decision
+    - calls reefcare_change_status()
+    - records the terminal case_event
     """
 
-    the_closure_result = await db.execute(
-        text(
-            """
-            SELECT reefcare_close_report(
-                :report_reference,
-                :coordinator_id,
-                :closure_reason_code,
-                :terminal_status_code,
-                :note,
-                :referred_to
-            ) AS terminal_status_code
-            """
-        ),
-        {
-            "report_reference":
-                report_reference,
-            "coordinator_id":
-                coordinator_id,
-            "closure_reason_code":
-                closure_reason_code,
-            "terminal_status_code":
-                terminal_status_code,
-            "note":
-                note,
-            "referred_to":
-                referred_to,
-        },
+    the_closure_result = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                    reefcare_close_report(
+                        :report_reference,
+                        :coordinator_id,
+                        :closure_reason_code,
+                        :terminal_status_code,
+                        :note,
+                        :referred_to
+                    )
+                    AS terminal_status_code
+                """
+            ),
+            {
+                "report_reference":
+                    report_reference,
+
+                "coordinator_id":
+                    coordinator_id,
+
+                "closure_reason_code":
+                    closure_reason_code,
+
+                "terminal_status_code":
+                    terminal_status_code,
+
+                "note":
+                    note,
+
+                "referred_to":
+                    referred_to,
+            },
+        )
     )
 
     return (
-        the_closure_result.scalar_one()
+        the_closure_result
+        .scalar_one()
     )

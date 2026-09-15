@@ -1,34 +1,31 @@
 # ---------------------------------------------------------------------------
-# Conservation action persistence (US7.1).
+# Conservation action persistence (US7.1 / API-11).
 #
-# Repositories own SQL; services own workflow.
+# Repositories own SQL.
 #
-# case_action.case_event_id is NOT NULL, so every action must be bound to a
-# case history entry in the same transaction that creates it. That is what
-# makes US7.1 AC3 structural rather than a convention the service layer has to
-# remember. Two functions below produce that event id, because an action does
-# not always move the case:
+# Every case_action row is tied to one case_event.
+# Action evidence reuses that relationship:
 #
-#   get_latest_action_event_id()     the action advanced the case, so the event
-#                                    was written by reefcare_change_status()
-#   insert_standalone_action_event() the case was already in the target status,
-#                                    so a plain append-only case_event is
-#                                    written with no status change
+# case_action.case_event_id
+#          =
+# evidence.case_event_id
 #
-# The second path leaves to_status_id NULL on purpose. reefcare_report_timeline
-# filters on to_status_id IS NOT NULL, so a second planned action of a
-# different type is recorded for the coordinator without repeating "A response
-# has been planned" in the observer's timeline.
+# This makes an uploaded file traceable to the specific
+# action without creating a second action-evidence link
+# table.
 # ---------------------------------------------------------------------------
 
 from datetime import date
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+)
 
 
-# case_event.event_type permits this value from Iteration 2 onwards.
-ACTION_EVENT_TYPE: str = "action_recorded"
+ACTION_EVENT_TYPE: str = (
+    "action_recorded"
+)
 
 
 async def get_action_type(
@@ -36,13 +33,10 @@ async def get_action_type(
     action_type_code: str,
 ) -> dict | None:
     """
-    Return one action type, or None when the code is unknown.
-
-    is_selectable is read rather than hardcoded so the reference table stays
-    the single source of truth, in the same way closure_reason does.
+    Return one action type or None when the code is unknown.
     """
 
-    the_action_type_result = await db.execute(
+    result = await db.execute(
         text(
             """
             SELECT
@@ -54,34 +48,40 @@ async def get_action_type(
 
             FROM action_type
 
-            WHERE code = :action_type_code
+            WHERE
+                code =
+                    :action_type_code
             """
         ),
         {
-            "action_type_code": action_type_code,
+            "action_type_code":
+                action_type_code,
         },
     )
 
-    the_action_type_row = (
-        the_action_type_result
+    row = (
+        result
         .mappings()
         .first()
     )
 
-    if the_action_type_row is None:
+    if row is None:
         return None
 
-    return dict(the_action_type_row)
+    return dict(
+        row
+    )
 
 
 async def list_selectable_action_types(
     db: AsyncSession,
 ) -> list[dict]:
     """
-    Return the action types a coordinator may currently choose.
+    Return action types currently selectable by a
+    coordinator.
     """
 
-    the_result = await db.execute(
+    result = await db.execute(
         text(
             """
             SELECT
@@ -91,16 +91,25 @@ async def list_selectable_action_types(
 
             FROM action_type
 
-            WHERE is_selectable IS TRUE
+            WHERE
+                is_selectable
+                    IS TRUE
 
-            ORDER BY display_order, code
+            ORDER BY
+                display_order,
+                code
             """
         )
     )
 
     return [
-        dict(the_row)
-        for the_row in the_result.mappings().all()
+        dict(
+            row
+        )
+        for row
+        in result
+        .mappings()
+        .all()
     ]
 
 
@@ -108,23 +117,18 @@ async def insert_standalone_action_event(
     db: AsyncSession,
     report_reference: str,
     coordinator_id: int,
-    note: str | None,
+    note: (
+        str | None
+    ),
 ) -> int:
     """
-    Write an action_recorded event that does not move the case status.
+    Write an action_recorded event without moving status.
 
-    Used when the case already sits in the status the action implies, for
-    example a second planned action on a case that is already
-    response_planned.
-
-    from_status_id and to_status_id are both left NULL. The event still
-    satisfies US1.4 traceability and US7.1 AC3, but it does not appear in the
-    observer timeline, which only returns events carrying a to_status_id.
-
-    The caller commits.
+    Used when a case already sits in the target action
+    status.
     """
 
-    the_event_result = await db.execute(
+    result = await db.execute(
         text(
             """
             INSERT INTO case_event
@@ -134,6 +138,7 @@ async def insert_standalone_action_event(
                     actor_user_id,
                     note
                 )
+
             SELECT
                 r.report_id,
                 :event_type,
@@ -143,66 +148,89 @@ async def insert_standalone_action_event(
             FROM report AS r
 
             WHERE
-                r.report_reference = :report_reference
-                AND r.deleted_at IS NULL
+                r.report_reference =
+                    :report_reference
 
-            RETURNING case_event_id
+                AND r.deleted_at
+                    IS NULL
+
+            RETURNING
+                case_event_id
             """
         ),
         {
-            "report_reference": report_reference,
-            "event_type": ACTION_EVENT_TYPE,
-            "coordinator_id": coordinator_id,
-            "note": note,
+            "report_reference":
+                report_reference,
+
+            "event_type":
+                ACTION_EVENT_TYPE,
+
+            "coordinator_id":
+                coordinator_id,
+
+            "note":
+                note,
         },
     )
 
-    return the_event_result.scalar_one()
+    return (
+        result.scalar_one()
+    )
 
 
 async def get_latest_action_event_id(
     db: AsyncSession,
     report_reference: str,
     coordinator_id: int,
-) -> int:
+) -> int | None:
     """
-    Find the action_recorded event this transaction just created through
-    reefcare_change_status().
-
-    That function returns the status code, not the event id, so the event has
-    to be located afterwards. Filtering on the acting coordinator makes it
-    safe: a report has exactly one owner at a time, and only the owner may
-    record an action, so the highest matching event id belongs to this
-    transaction.
-
-    The caller commits.
+    Locate the latest action_recorded event created for this
+    report by the current coordinator.
     """
 
-    the_event_result = await db.execute(
+    result = await db.execute(
         text(
             """
-            SELECT MAX(e.case_event_id)
+            SELECT
+                MAX(
+                    e.case_event_id
+                )
 
             FROM case_event AS e
 
             JOIN report AS r
-                ON r.report_id = e.report_id
+                ON r.report_id =
+                   e.report_id
 
             WHERE
-                r.report_reference = :report_reference
-                AND r.deleted_at IS NULL
-                AND e.event_type = :event_type
-                AND e.actor_user_id = :coordinator_id
+                r.report_reference =
+                    :report_reference
+
+                AND r.deleted_at
+                    IS NULL
+
+                AND e.event_type =
+                    :event_type
+
+                AND e.actor_user_id =
+                    :coordinator_id
             """
         ),
         {
-            "report_reference": report_reference,
-            "event_type": ACTION_EVENT_TYPE,
-            "coordinator_id": coordinator_id,
+            "report_reference":
+                report_reference,
+
+            "event_type":
+                ACTION_EVENT_TYPE,
+
+            "coordinator_id":
+                coordinator_id,
         },
     )
 
-    return the_event_result.scalar_one()
+    return (
+        result.scalar_one()
+    )
 
 
 async def save_case_action(
@@ -211,22 +239,24 @@ async def save_case_action(
     case_event_id: int,
     action_type_id: int,
     action_state: str,
-    action_date: date | None,
-    responsible_team: str | None,
-    notes: str | None,
+    action_date: (
+        date | None
+    ),
+    responsible_team: (
+        str | None
+    ),
+    notes: (
+        str | None
+    ),
     created_by: int,
 ) -> dict:
     """
-    Insert one action record.
-
-    case_action is append-only by grant: reefcare_app holds SELECT and INSERT
-    and nothing else. Superseding an action means inserting a later row, never
-    updating an earlier one, for the same reason case_event works that way.
+    Insert one append-only case_action row.
 
     The caller commits.
     """
 
-    the_action_result = await db.execute(
+    result = await db.execute(
         text(
             """
             INSERT INTO case_action
@@ -240,6 +270,7 @@ async def save_case_action(
                     notes,
                     created_by
                 )
+
             SELECT
                 r.report_id,
                 :case_event_id,
@@ -253,11 +284,15 @@ async def save_case_action(
             FROM report AS r
 
             WHERE
-                r.report_reference = :report_reference
-                AND r.deleted_at IS NULL
+                r.report_reference =
+                    :report_reference
+
+                AND r.deleted_at
+                    IS NULL
 
             RETURNING
                 case_action_id,
+                case_event_id,
                 action_state,
                 action_date,
                 responsible_team,
@@ -267,27 +302,44 @@ async def save_case_action(
             """
         ),
         {
-            "report_reference": report_reference,
-            "case_event_id": case_event_id,
-            "action_type_id": action_type_id,
-            "action_state": action_state,
-            "action_date": action_date,
-            "responsible_team": responsible_team,
-            "notes": notes,
-            "created_by": created_by,
+            "report_reference":
+                report_reference,
+
+            "case_event_id":
+                case_event_id,
+
+            "action_type_id":
+                action_type_id,
+
+            "action_state":
+                action_state,
+
+            "action_date":
+                action_date,
+
+            "responsible_team":
+                responsible_team,
+
+            "notes":
+                notes,
+
+            "created_by":
+                created_by,
         },
     )
 
-    the_action_row = (
-        the_action_result
+    row = (
+        result
         .mappings()
         .first()
     )
 
-    if the_action_row is None:
+    if row is None:
         return {}
 
-    return dict(the_action_row)
+    return dict(
+        row
+    )
 
 
 async def list_case_actions(
@@ -295,62 +347,311 @@ async def list_case_actions(
     report_reference: str,
 ) -> list[dict]:
     """
-    Return every action recorded against one case, oldest first.
-
-    Ordered by case_action_id rather than created_at so two actions written in
-    the same transaction still read back in insertion order, matching how
-    reefcare_report_timeline() orders.
+    Return every action recorded against one report,
+    oldest first.
     """
 
-    the_result = await db.execute(
+    result = await db.execute(
         text(
             """
             SELECT
                 ca.case_action_id,
+                ca.case_event_id,
 
                 r.report_reference,
 
-                at.code  AS action_type_code,
-                at.label AS action_type_label,
+                at.code
+                    AS action_type_code,
+
+                at.label
+                    AS action_type_label,
 
                 ca.action_state,
                 ca.action_date,
                 ca.responsible_team,
                 ca.notes,
 
-                cs.code AS status_code,
+                cs.code
+                    AS status_code,
 
                 ca.created_by,
-                u.display_name AS created_by_name,
+
+                u.display_name
+                    AS created_by_name,
+
                 ca.created_at
 
             FROM case_action AS ca
 
             JOIN report AS r
-                ON r.report_id = ca.report_id
+                ON r.report_id =
+                   ca.report_id
 
             JOIN action_type AS at
-                ON at.action_type_id = ca.action_type_id
+                ON at.action_type_id =
+                   ca.action_type_id
 
             JOIN case_status AS cs
-                ON cs.case_status_id = r.current_status_id
+                ON cs.case_status_id =
+                   r.current_status_id
 
             LEFT JOIN app_user AS u
-                ON u.user_id = ca.created_by
+                ON u.user_id =
+                   ca.created_by
 
             WHERE
-                r.report_reference = :report_reference
-                AND r.deleted_at IS NULL
+                r.report_reference =
+                    :report_reference
 
-            ORDER BY ca.case_action_id ASC
+                AND r.deleted_at
+                    IS NULL
+
+            ORDER BY
+                ca.case_action_id ASC
             """
         ),
         {
-            "report_reference": report_reference,
+            "report_reference":
+                report_reference,
         },
     )
 
     return [
-        dict(the_row)
-        for the_row in the_result.mappings().all()
+        dict(
+            row
+        )
+        for row
+        in result
+        .mappings()
+        .all()
+    ]
+
+
+async def get_case_action_for_report(
+    db: AsyncSession,
+    report_reference: str,
+    action_id: int,
+) -> dict | None:
+    """
+    Return an action only when it belongs to the requested
+    live report.
+
+    This prevents action IDs being attached across cases.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                ca.case_action_id,
+                ca.case_event_id,
+                ca.report_id
+
+            FROM case_action AS ca
+
+            JOIN report AS r
+                ON r.report_id =
+                   ca.report_id
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND ca.case_action_id =
+                    :action_id
+
+                AND r.deleted_at
+                    IS NULL
+
+            LIMIT 1
+            """
+        ),
+        {
+            "report_reference":
+                report_reference,
+
+            "action_id":
+                action_id,
+        },
+    )
+
+    row = (
+        result
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        return None
+
+    return dict(
+        row
+    )
+
+
+async def save_action_evidence(
+    db: AsyncSession,
+    report_reference: str,
+    case_event_id: int,
+    uploaded_by_user_id: int,
+    file_reference: str,
+    file_size_bytes: int,
+) -> dict | None:
+    """
+    Insert private evidence metadata attached to an action's
+    case event.
+
+    file_reference remains internal and is never returned
+    by the API response schema.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            INSERT INTO evidence
+                (
+                    report_id,
+                    dive_session_id,
+                    media_type,
+                    file_reference,
+                    file_size_bytes,
+                    display_order,
+                    case_event_id,
+                    uploaded_by_user_id
+                )
+
+            SELECT
+                r.report_id,
+                r.dive_session_id,
+                'photo',
+                :file_reference,
+                :file_size_bytes,
+
+                COALESCE(
+                    (
+                        SELECT
+                            MAX(
+                                e2.display_order
+                            ) + 1
+
+                        FROM evidence AS e2
+
+                        WHERE
+                            e2.report_id =
+                                r.report_id
+                    ),
+                    0
+                ),
+
+                :case_event_id,
+                :uploaded_by_user_id
+
+            FROM report AS r
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.deleted_at
+                    IS NULL
+
+            RETURNING
+                evidence_id,
+                media_type,
+                file_size_bytes,
+                uploaded_at
+            """
+        ),
+        {
+            "report_reference":
+                report_reference,
+
+            "file_reference":
+                file_reference,
+
+            "file_size_bytes":
+                file_size_bytes,
+
+            "case_event_id":
+                case_event_id,
+
+            "uploaded_by_user_id":
+                uploaded_by_user_id,
+        },
+    )
+
+    row = (
+        result
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        return None
+
+    return dict(
+        row
+    )
+
+
+async def list_action_evidence_metadata(
+    db: AsyncSession,
+    report_reference: str,
+) -> list[dict]:
+    """
+    Return safe evidence metadata grouped by the action
+    sharing the same case_event.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                ca.case_action_id,
+
+                e.evidence_id,
+                e.media_type,
+                e.file_size_bytes,
+                e.uploaded_at
+
+            FROM case_action AS ca
+
+            JOIN report AS r
+                ON r.report_id =
+                   ca.report_id
+
+            JOIN evidence AS e
+                ON e.report_id =
+                   ca.report_id
+
+                AND e.case_event_id =
+                    ca.case_event_id
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.deleted_at
+                    IS NULL
+
+            ORDER BY
+                ca.case_action_id ASC,
+                e.display_order ASC,
+                e.evidence_id ASC
+            """
+        ),
+        {
+            "report_reference":
+                report_reference,
+        },
+    )
+
+    return [
+        dict(
+            row
+        )
+        for row
+        in result
+        .mappings()
+        .all()
     ]

@@ -1,70 +1,85 @@
 # ---------------------------------------------------------------------------
-# Conservation action policy (US7.1).
+# Conservation action policy (US7.1 / API-11).
 #
-# Services decide whether an action is allowed; repositories carry it out.
+# Services decide whether an action is allowed;
+# repositories perform persistence.
 #
-# SECURITY NOTE: reefcare_change_status() records p_actor_user_id in the audit
-# event but does not check that the actor owns the case. load_owned_case() is
-# therefore the only thing preventing one coordinator recording an action on
-# another coordinator's case, exactly as it is for the information request in
-# case_workflow_service.
-#
-# The state model follows US7.1 AC1, Evidence Accepted -> Action Planned ->
-# Action Taken, mapped onto the statuses PostgreSQL already seeds:
-#
-#   response_recommended  reached by the US5.4 intervention_required decision
-#     -> action_planned   moves the case to response_planned
-#     -> action_taken     moves the case to response_complete
-#
-# A case may carry more than one action. Recording a second planned action
-# while the case already sits in response_planned is legitimate: a coordinator
-# may plan both a gear removal and an authority notification. The action is
-# therefore recorded without a status move rather than rejected.
+# API-11 extends this service with private evidence
+# attachment while preserving the existing append-only
+# action model.
 # ---------------------------------------------------------------------------
 
 from datetime import date
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import UploadFile
+from sqlalchemy.exc import (
+    SQLAlchemyError,
+)
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+)
 
-from app.core.enums import ActionState, CaseStatus
-from app.core.exceptions import DomainValidationError, WorkflowError
+from app.core.enums import (
+    ActionState,
+    CaseStatus,
+)
+from app.core.exceptions import (
+    DatabaseOperationError,
+    DomainValidationError,
+    NotFoundError,
+    WorkflowError,
+)
 from app.repositories.case_action_repository import (
     get_action_type,
+    get_case_action_for_report,
     get_latest_action_event_id,
     insert_standalone_action_event,
+    list_action_evidence_metadata,
     list_case_actions,
     list_selectable_action_types,
+    save_action_evidence,
     save_case_action,
 )
-from app.repositories.case_repository import change_status
+from app.repositories.case_repository import (
+    change_status,
+)
 from app.services.case_workflow_service import (
     load_owned_case,
     validate_status_transition,
 )
+from app.services.evidence_service import (
+    delete_private_evidence,
+    store_private_evidence,
+    validate_photo,
+)
 
 
-# case_event.event_type for an action. Mirrors the repository constant so the
-# service can pass it to reefcare_change_status().
-ACTION_EVENT_TYPE: str = "action_recorded"
+ACTION_EVENT_TYPE: str = (
+    "action_recorded"
+)
 
 
-# The status a case reaches once the action is recorded.
-STATUS_FOR_ACTION_STATE: dict[str, str] = {
-    ActionState.ACTION_PLANNED.value: CaseStatus.RESPONSE_PLANNED.value,
-    ActionState.ACTION_TAKEN.value: CaseStatus.RESPONSE_COMPLETE.value,
+STATUS_FOR_ACTION_STATE: dict[
+    str,
+    str,
+] = {
+    ActionState.ACTION_PLANNED.value:
+        CaseStatus.RESPONSE_PLANNED.value,
+
+    ActionState.ACTION_TAKEN.value:
+        CaseStatus.RESPONSE_COMPLETE.value,
 }
 
 
-# The statuses a case may be in before each action state is allowed.
-#
-# action_planned accepts a case already in response_planned so a second planned
-# action is recorded rather than refused. action_taken accepts a case already
-# in response_complete for the same reason.
-PERMITTED_STATUSES_FOR_ACTION_STATE: dict[str, set[str]] = {
+PERMITTED_STATUSES_FOR_ACTION_STATE: dict[
+    str,
+    set[str],
+] = {
     ActionState.ACTION_PLANNED.value: {
         CaseStatus.RESPONSE_RECOMMENDED.value,
         CaseStatus.RESPONSE_PLANNED.value,
     },
+
     ActionState.ACTION_TAKEN.value: {
         CaseStatus.RESPONSE_PLANNED.value,
         CaseStatus.RESPONSE_COMPLETE.value,
@@ -77,32 +92,36 @@ def validate_action_state_against_case(
     current_status_code: str,
 ) -> None:
     """
-    Check the action against the case's current status before anything is
-    written.
+    Check whether this action state may be recorded from
+    the case's current status.
 
-    An early-feedback check only. reefcare_guard_status_change() remains
-    authoritative and will reject an unlisted transition regardless of what
-    this concludes.
-
-    The error names the status the case is actually in, because a coordinator
-    who reaches this has almost always tried to record an action on a case that
-    has not yet had an intervention_required decision.
+    PostgreSQL remains authoritative for actual status
+    transitions.
     """
 
-    the_permitted_statuses = PERMITTED_STATUSES_FOR_ACTION_STATE.get(
-        action_state
+    permitted = (
+        PERMITTED_STATUSES_FOR_ACTION_STATE
+        .get(
+            action_state
+        )
     )
 
-    if the_permitted_statuses is None:
+    if permitted is None:
         raise DomainValidationError(
-            f"Unknown action state: {action_state}"
+            "Unknown action state: "
+            f"{action_state}"
         )
 
-    if current_status_code not in the_permitted_statuses:
+    if (
+        current_status_code
+        not in permitted
+    ):
         raise WorkflowError(
-            f"An action cannot be recorded while the case is "
-            f"{current_status_code}. Record an Intervention Required "
-            f"decision first."
+            "An action cannot be recorded "
+            "while the case is "
+            f"{current_status_code}. "
+            "Record an Intervention Required "
+            "decision first."
         )
 
 
@@ -111,25 +130,35 @@ async def load_selectable_action_type(
     action_type_code: str,
 ) -> dict:
     """
-    Resolve the action type code and confirm it may currently be chosen.
+    Resolve one action type and confirm it is currently
+    selectable.
     """
 
-    the_action_type = await get_action_type(
-        db=db,
-        action_type_code=action_type_code,
+    action_type = (
+        await get_action_type(
+            db=db,
+            action_type_code=(
+                action_type_code
+            ),
+        )
     )
 
-    if the_action_type is None:
+    if action_type is None:
         raise DomainValidationError(
-            f"Unknown action type: {action_type_code}"
+            "Unknown action type: "
+            f"{action_type_code}"
         )
 
-    if not the_action_type["is_selectable"]:
+    if not action_type[
+        "is_selectable"
+    ]:
         raise WorkflowError(
-            f"Action type {action_type_code} is not currently selectable"
+            "Action type "
+            f"{action_type_code} "
+            "is not currently selectable"
         )
 
-    return the_action_type
+    return action_type
 
 
 async def record_action(
@@ -138,107 +167,225 @@ async def record_action(
     coordinator_id: int,
     action_type_code: str,
     action_state: str,
-    action_date: date | None,
-    responsible_team: str | None,
-    notes: str | None,
+    action_date: (
+        date | None
+    ),
+    responsible_team: (
+        str | None
+    ),
+    notes: (
+        str | None
+    ),
 ) -> dict:
     """
-    Record one conservation action against a case this coordinator owns.
+    Record one append-only conservation action on an owned
+    case.
 
-    Order matters. Ownership is checked before anything else, so a coordinator
-    who does not own the case learns nothing about its current state.
+    If the action changes case status,
+    reefcare_change_status() creates the associated
+    action_recorded case_event.
 
-    Whether the case status moves depends on where it already is. If it needs
-    to move, reefcare_change_status() writes both the status and the
-    action_recorded event in one transaction, and the event is located
-    afterwards. If the case already sits in the target status, a standalone
-    event is written instead, which keeps the action traceable without
-    repeating an observer-facing status entry that has already been shown.
-
-    The caller commits.
+    If the case is already in the target state, a
+    standalone append-only action event is created instead.
     """
 
-    the_case = await load_owned_case(
+    case = await load_owned_case(
         db=db,
-        report_reference=report_reference,
-        coordinator_id=coordinator_id,
+        report_reference=(
+            report_reference
+        ),
+        coordinator_id=(
+            coordinator_id
+        ),
     )
 
     validate_action_state_against_case(
-        action_state=action_state,
-        current_status_code=the_case["status_code"],
+        action_state=(
+            action_state
+        ),
+        current_status_code=(
+            case["status_code"]
+        ),
     )
 
-    the_action_type = await load_selectable_action_type(
-        db=db,
-        action_type_code=action_type_code,
+    action_type = (
+        await load_selectable_action_type(
+            db=db,
+            action_type_code=(
+                action_type_code
+            ),
+        )
     )
 
-    the_target_status = STATUS_FOR_ACTION_STATE[action_state]
-    the_case_moves = the_case["status_code"] != the_target_status
+    target_status = (
+        STATUS_FOR_ACTION_STATE[
+            action_state
+        ]
+    )
 
-    if the_case_moves:
+    case_moves = (
+        case["status_code"]
+        != target_status
+    )
+
+    if case_moves:
         await validate_status_transition(
             db=db,
-            from_status_code=the_case["status_code"],
-            to_status_code=the_target_status,
+            from_status_code=(
+                case[
+                    "status_code"
+                ]
+            ),
+            to_status_code=(
+                target_status
+            ),
         )
 
-        the_resulting_status = await change_status(
-            db=db,
-            report_reference=report_reference,
-            status_code=the_target_status,
-            actor_user_id=coordinator_id,
-            note=notes,
-            event_type=ACTION_EVENT_TYPE,
+        resulting_status = (
+            await change_status(
+                db=db,
+                report_reference=(
+                    report_reference
+                ),
+                status_code=(
+                    target_status
+                ),
+                actor_user_id=(
+                    coordinator_id
+                ),
+                note=notes,
+                event_type=(
+                    ACTION_EVENT_TYPE
+                ),
+            )
         )
 
-        the_case_event_id = await get_latest_action_event_id(
-            db=db,
-            report_reference=report_reference,
-            coordinator_id=coordinator_id,
+        case_event_id = (
+            await get_latest_action_event_id(
+                db=db,
+                report_reference=(
+                    report_reference
+                ),
+                coordinator_id=(
+                    coordinator_id
+                ),
+            )
         )
 
     else:
-        the_resulting_status = the_case["status_code"]
-
-        the_case_event_id = await insert_standalone_action_event(
-            db=db,
-            report_reference=report_reference,
-            coordinator_id=coordinator_id,
-            note=notes,
+        resulting_status = (
+            case["status_code"]
         )
 
-    the_saved_action = await save_case_action(
+        case_event_id = (
+            await insert_standalone_action_event(
+                db=db,
+                report_reference=(
+                    report_reference
+                ),
+                coordinator_id=(
+                    coordinator_id
+                ),
+                note=notes,
+            )
+        )
+
+    if case_event_id is None:
+        raise DatabaseOperationError(
+            "The action history event "
+            "could not be resolved"
+        )
+
+    saved = await save_case_action(
         db=db,
-        report_reference=report_reference,
-        case_event_id=the_case_event_id,
-        action_type_id=the_action_type["action_type_id"],
-        action_state=action_state,
-        action_date=action_date,
-        responsible_team=responsible_team,
+        report_reference=(
+            report_reference
+        ),
+        case_event_id=(
+            case_event_id
+        ),
+        action_type_id=(
+            action_type[
+                "action_type_id"
+            ]
+        ),
+        action_state=(
+            action_state
+        ),
+        action_date=(
+            action_date
+        ),
+        responsible_team=(
+            responsible_team
+        ),
         notes=notes,
-        created_by=coordinator_id,
+        created_by=(
+            coordinator_id
+        ),
     )
 
     return {
-        "case_action_id": the_saved_action["case_action_id"],
-        "report_reference": report_reference,
+        "case_action_id":
+            saved[
+                "case_action_id"
+            ],
 
-        "action_type_code": the_action_type["code"],
-        "action_type_label": the_action_type["label"],
+        "case_event_id":
+            saved[
+                "case_event_id"
+            ],
 
-        "action_state": the_saved_action["action_state"],
-        "action_date": the_saved_action["action_date"],
+        "report_reference":
+            report_reference,
 
-        "responsible_team": the_saved_action["responsible_team"],
-        "notes": the_saved_action["notes"],
+        "action_type_code":
+            action_type[
+                "code"
+            ],
 
-        "status_code": the_resulting_status,
+        "action_type_label":
+            action_type[
+                "label"
+            ],
 
-        "created_by": the_saved_action["created_by"],
-        "created_by_name": None,
-        "created_at": the_saved_action["created_at"],
+        "action_state":
+            saved[
+                "action_state"
+            ],
+
+        "action_date":
+            saved[
+                "action_date"
+            ],
+
+        "responsible_team":
+            saved[
+                "responsible_team"
+            ],
+
+        "notes":
+            saved[
+                "notes"
+            ],
+
+        "status_code":
+            resulting_status,
+
+        "created_by":
+            saved[
+                "created_by"
+            ],
+
+        "created_by_name":
+            None,
+
+        "created_at":
+            saved[
+                "created_at"
+            ],
+
+        "evidence":
+            [],
     }
 
 
@@ -248,30 +395,247 @@ async def list_actions_for_owned_case(
     coordinator_id: int,
 ) -> list[dict]:
     """
-    Return every action recorded against a case this coordinator owns.
-
-    Ownership is verified before any action detail is returned. An action
-    record names a responsible team and describes what a conservation partner
-    did or intends to do, which is not queue-safe information.
+    Return all actions plus safe attachment metadata for an
+    owned case.
     """
 
     await load_owned_case(
         db=db,
-        report_reference=report_reference,
-        coordinator_id=coordinator_id,
+        report_reference=(
+            report_reference
+        ),
+        coordinator_id=(
+            coordinator_id
+        ),
     )
 
-    return await list_case_actions(
+    actions = await list_case_actions(
         db=db,
-        report_reference=report_reference,
+        report_reference=(
+            report_reference
+        ),
     )
+
+    evidence_rows = (
+        await list_action_evidence_metadata(
+            db=db,
+            report_reference=(
+                report_reference
+            ),
+        )
+    )
+
+    by_action: dict[
+        int,
+        list[dict],
+    ] = {}
+
+    for row in evidence_rows:
+        by_action.setdefault(
+            row[
+                "case_action_id"
+            ],
+            [],
+        ).append(
+            {
+                "evidence_id":
+                    row[
+                        "evidence_id"
+                    ],
+
+                "media_type":
+                    row[
+                        "media_type"
+                    ],
+
+                "file_size_bytes":
+                    row[
+                        "file_size_bytes"
+                    ],
+
+                "uploaded_at":
+                    row[
+                        "uploaded_at"
+                    ],
+            }
+        )
+
+    result = []
+
+    for action in actions:
+        item = dict(
+            action
+        )
+
+        item["evidence"] = (
+            by_action.get(
+                item[
+                    "case_action_id"
+                ],
+                [],
+            )
+        )
+
+        result.append(
+            item
+        )
+
+    return result
+
+
+async def attach_evidence_to_action(
+    db: AsyncSession,
+    report_reference: str,
+    action_id: int,
+    coordinator_id: int,
+    photo: UploadFile,
+) -> dict:
+    """
+    Store one private image against a specific conservation
+    action.
+
+    Security/order:
+
+    1. Verify current case ownership.
+    2. Verify action belongs to the same report.
+    3. Validate the upload.
+    4. Store the private file.
+    5. Insert evidence metadata with case_event_id and
+       uploaded_by_user_id.
+    6. Commit.
+
+    If the database write fails after storage succeeded,
+    the stored object is deleted best-effort.
+
+    No action state or case status is changed.
+    """
+
+    await load_owned_case(
+        db=db,
+        report_reference=(
+            report_reference
+        ),
+        coordinator_id=(
+            coordinator_id
+        ),
+    )
+
+    action = (
+        await get_case_action_for_report(
+            db=db,
+            report_reference=(
+                report_reference
+            ),
+            action_id=(
+                action_id
+            ),
+        )
+    )
+
+    if action is None:
+        raise NotFoundError(
+            "Action not found"
+        )
+
+    content = await validate_photo(
+        photo
+    )
+
+    stored_file = (
+        await store_private_evidence(
+            photo=photo,
+            content=content,
+        )
+    )
+
+    try:
+        evidence = (
+            await save_action_evidence(
+                db=db,
+                report_reference=(
+                    report_reference
+                ),
+                case_event_id=(
+                    action[
+                        "case_event_id"
+                    ]
+                ),
+                uploaded_by_user_id=(
+                    coordinator_id
+                ),
+                file_reference=(
+                    stored_file
+                    .file_reference
+                ),
+                file_size_bytes=(
+                    stored_file
+                    .file_size_bytes
+                ),
+            )
+        )
+
+        if evidence is None:
+            await db.rollback()
+
+            await delete_private_evidence(
+                stored_file
+                .file_reference
+            )
+
+            raise NotFoundError(
+                "Report not found"
+            )
+
+        await db.commit()
+
+    except SQLAlchemyError as exc:
+        await db.rollback()
+
+        await delete_private_evidence(
+            stored_file
+            .file_reference
+        )
+
+        raise DatabaseOperationError(
+            "The action evidence "
+            "could not be recorded"
+        ) from exc
+
+    return {
+        "evidence_id":
+            evidence[
+                "evidence_id"
+            ],
+
+        "case_action_id":
+            action_id,
+
+        "media_type":
+            evidence[
+                "media_type"
+            ],
+
+        "file_size_bytes":
+            evidence[
+                "file_size_bytes"
+            ],
+
+        "uploaded_at":
+            evidence[
+                "uploaded_at"
+            ],
+    }
 
 
 async def list_action_type_options(
     db: AsyncSession,
 ) -> list[dict]:
     """
-    Return the action type vocabulary for the coordinator interface.
+    Return currently selectable action type reference data.
     """
 
-    return await list_selectable_action_types(db=db)
+    return (
+        await list_selectable_action_types(
+            db=db
+        )
+    )
