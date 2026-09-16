@@ -102,6 +102,21 @@ async def test_maps_valid_model_output_to_reviewable_suggestions(
         "approximate size",
         "animal interaction",
     ]
+    assert [
+        question.field
+        for question in result.follow_up_questions
+    ] == [
+        "approximate_size",
+        "animal_interaction",
+    ]
+    assert result.follow_up_questions[0].options == [
+        "<1 m",
+        "1-5 m",
+        "5-10 m",
+        ">10 m",
+        "Unsure",
+    ]
+    assert result.requires_user_confirmation is True
 
 
 @pytest.mark.asyncio
@@ -146,6 +161,99 @@ async def test_uses_not_specified_instead_of_guessing_threat(
     assert result.suggestions[0].suggested_value == (
         "Not specified"
     )
+    assert result.follow_up_questions == []
+
+
+@pytest.mark.asyncio
+async def test_skips_follow_up_for_information_already_extracted(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        settings,
+        "gemini_api_key",
+        SecretStr("test-key"),
+    )
+    monkeypatch.setattr(
+        smart_report_service,
+        "_post_json",
+        lambda payload: {
+            "output_text": json.dumps(
+                {
+                    "possible_threat": "coral bleaching",
+                    "estimated_depth_metres": None,
+                    "approximate_size": "several colonies",
+                    "coral_interaction": None,
+                    "animal_interaction": None,
+                    "site_reference": None,
+                    "missing_information": [],
+                }
+            )
+        },
+    )
+
+    result = await (
+        smart_report_service
+        .structure_report_description(
+            "Several coral colonies looked pale or white."
+        )
+    )
+
+    assert result.available is True
+    assert result.follow_up_questions == []
+
+
+@pytest.mark.asyncio
+async def test_uses_controlled_question_for_physical_damage(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        settings,
+        "gemini_api_key",
+        SecretStr("test-key"),
+    )
+    monkeypatch.setattr(
+        smart_report_service,
+        "_post_json",
+        lambda payload: {
+            "output_text": json.dumps(
+                {
+                    "possible_threat": "physical reef damage",
+                    "estimated_depth_metres": None,
+                    "approximate_size": None,
+                    "coral_interaction": None,
+                    "animal_interaction": None,
+                    "site_reference": None,
+                    "missing_information": [
+                        "appearance of the damage",
+                    ],
+                }
+            )
+        },
+    )
+
+    result = await (
+        smart_report_service
+        .structure_report_description(
+            "I saw recently damaged coral near the reef."
+        )
+    )
+
+    assert len(result.follow_up_questions) == 1
+    question = result.follow_up_questions[0]
+    assert question.field == "coral_interaction"
+    assert question.question == (
+        "What did the damage look like?"
+    )
+    assert "Collision damage" in question.options
+
+
+def test_normalises_supported_threat_wording_safely():
+    assert smart_report_service._normalise_threat(
+        "Ghost-fishing gear."
+    ) == "ghost fishing gear"
+    assert smart_report_service._normalise_threat(
+        "an unsupported diagnosis"
+    ) is None
 
 
 def test_provider_payload_excludes_photos_and_location():
@@ -166,6 +274,7 @@ def test_provider_payload_excludes_photos_and_location():
     assert "image_url" not in encoded
     assert "latitude" not in encoded
     assert "longitude" not in encoded
+    assert "do not create follow-up questions" in encoded
 
 
 def test_posts_to_gemini_interactions_with_secret_header(
