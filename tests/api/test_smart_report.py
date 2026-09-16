@@ -12,6 +12,7 @@ from app.api.dependencies.authorization import (
 from app.api.routes import reports as reports_routes
 from app.main import app
 from app.schemas.smart_report import (
+    SmartReportFollowUpQuestion,
     SmartReportStructureResponse,
     SmartReportSuggestion,
 )
@@ -111,6 +112,22 @@ def test_smart_structure_returns_camel_case_suggestions(
             missing_information=[
                 "approximate size"
             ],
+            follow_up_questions=[
+                SmartReportFollowUpQuestion(
+                    field="approximate_size",
+                    question=(
+                        "About how large was the net "
+                        "or gear?"
+                    ),
+                    options=[
+                        "<1 m",
+                        "1-5 m",
+                        "5-10 m",
+                        ">10 m",
+                        "Unsure",
+                    ],
+                )
+            ],
             message=(
                 "Review every AI suggestion."
             ),
@@ -146,5 +163,22 @@ def test_smart_structure_returns_camel_case_suggestions(
         "missingInformation": [
             "approximate size"
         ],
+        "followUpQuestions": [
+            {
+                "field": "approximate_size",
+                "question": (
+                    "About how large was the net "
+                    "or gear?"
+                ),
+                "options": [
+                    "<1 m",
+                    "1-5 m",
+                    "5-10 m",
+                    ">10 m",
+                    "Unsure",
+                ],
+            }
+        ],
+        "requiresUserConfirmation": True,
         "message": "Review every AI suggestion.",
     }

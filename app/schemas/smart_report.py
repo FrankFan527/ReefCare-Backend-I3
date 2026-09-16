@@ -34,6 +34,26 @@ class SmartReportSuggestion(APIModel):
     )
 
 
+class SmartReportFollowUpQuestion(APIModel):
+    """
+    One bounded, predefined clarification question.
+
+    Gemini identifies which supported values are absent;
+    ReefCare owns the wording and permitted answers so this
+    never becomes an unrestricted AI conversation.
+    """
+
+    field: SmartReportField
+    question: str = Field(
+        min_length=1,
+        max_length=240,
+    )
+    options: list[str] = Field(
+        min_length=2,
+        max_length=5,
+    )
+
+
 class SmartReportStructureResponse(APIModel):
     available: bool
     suggestions: list[SmartReportSuggestion] = Field(
@@ -44,6 +64,13 @@ class SmartReportStructureResponse(APIModel):
         default_factory=list,
         max_length=6,
     )
+    follow_up_questions: list[
+        SmartReportFollowUpQuestion
+    ] = Field(
+        default_factory=list,
+        max_length=2,
+    )
+    requires_user_confirmation: bool = True
     message: str | None = Field(
         default=None,
         max_length=300,

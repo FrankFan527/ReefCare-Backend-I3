@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.core.config import settings
 from app.schemas.smart_report import (
+    SmartReportFollowUpQuestion,
     SmartReportStructureResponse,
     SmartReportSuggestion,
 )
@@ -42,6 +43,69 @@ _FIELD_LABELS = {
     "coral_interaction": "Coral interaction",
     "animal_interaction": "Animal interaction",
     "site_reference": "Site reference",
+}
+
+
+_FOLLOW_UP_TEMPLATES = {
+    "ghost fishing gear": (
+        {
+            "field": "approximate_size",
+            "question": (
+                "About how large was the net or gear?"
+            ),
+            "options": [
+                "<1 m",
+                "1-5 m",
+                "5-10 m",
+                ">10 m",
+                "Unsure",
+            ],
+        },
+        {
+            "field": "animal_interaction",
+            "question": (
+                "Did you see any marine animals trapped "
+                "in or interacting with it?"
+            ),
+            "options": ["Yes", "No", "Unsure"],
+        },
+    ),
+    "coral bleaching": (
+        {
+            "field": "approximate_size",
+            "question": (
+                "How much coral appeared pale or white?"
+            ),
+            "options": [
+                "Small patch",
+                "Several colonies",
+                "Widespread",
+                "Unsure",
+            ],
+        },
+    ),
+    "marine debris": (
+        {
+            "field": "coral_interaction",
+            "question": (
+                "Was the debris touching or caught "
+                "on coral?"
+            ),
+            "options": ["Yes", "No", "Unsure"],
+        },
+    ),
+    "physical reef damage": (
+        {
+            "field": "coral_interaction",
+            "question": "What did the damage look like?",
+            "options": [
+                "Broken coral",
+                "Anchor or rope damage",
+                "Collision damage",
+                "Other or unsure",
+            ],
+        },
+    ),
 }
 
 
@@ -99,7 +163,11 @@ def _provider_payload(description: str) -> dict:
             "damage, or null when uncertain. Use concise, "
             "plain English. List useful missing information "
             "as questions or short labels. The suggestions "
-            "are advisory and require Observer confirmation."
+            "are advisory and require Observer confirmation. "
+            "Return null instead of 'not specified' for any "
+            "value that is not explicitly supported. Do not "
+            "create follow-up questions; ReefCare selects a "
+            "small predefined question set after extraction."
         ),
         "input": description,
         "response_format": {
@@ -191,14 +259,83 @@ def _to_api_response(
         if cleaned and cleaned not in missing:
             missing.append(cleaned)
 
+    follow_up_questions = (
+        _select_follow_up_questions(model_output)
+    )
+
     return SmartReportStructureResponse(
         available=True,
         suggestions=suggestions,
         missing_information=missing,
+        follow_up_questions=follow_up_questions,
+        requires_user_confirmation=True,
         message=(
             "Review every AI suggestion before continuing."
         ),
     )
+
+
+def _normalise_threat(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalised = " ".join(
+        "".join(
+            character
+            if character.isalnum()
+            else " "
+            for character in value.lower()
+        ).split()
+    )
+    aliases = {
+        "ghost gear": "ghost fishing gear",
+        "fishing gear": "ghost fishing gear",
+        "bleaching": "coral bleaching",
+        "debris": "marine debris",
+        "reef damage": "physical reef damage",
+        "physical damage": "physical reef damage",
+    }
+    canonical = aliases.get(normalised, normalised)
+    return (
+        canonical
+        if canonical in _FOLLOW_UP_TEMPLATES
+        else None
+    )
+
+
+def _select_follow_up_questions(
+    model_output: _StructuredModelOutput,
+) -> list[SmartReportFollowUpQuestion]:
+    """
+    Return no more than two high-value clarifications.
+
+    Gemini's null structured values identify what is absent.
+    ReefCare then chooses wording and answer choices from a
+    controlled set associated with the likely threat.
+    """
+
+    threat = _normalise_threat(
+        model_output.possible_threat
+    )
+    if threat is None:
+        return []
+
+    questions: list[SmartReportFollowUpQuestion] = []
+    for template in _FOLLOW_UP_TEMPLATES[threat]:
+        field = template["field"]
+        if getattr(model_output, field) is not None:
+            continue
+        questions.append(
+            SmartReportFollowUpQuestion(
+                field=field,
+                question=template["question"],
+                options=template["options"],
+            )
+        )
+        if len(questions) == 2:
+            break
+
+    return questions
 
 
 async def structure_report_description(

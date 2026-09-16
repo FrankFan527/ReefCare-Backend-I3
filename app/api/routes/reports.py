@@ -113,6 +113,7 @@ async def smart_structure_report(
     - never receives evidence files or precise coordinates
     - never persists the description or AI output
     - returns advisory suggestions requiring confirmation
+    - selects at most two relevant predefined follow-ups
     - returns an available=false fallback when AI fails
     """
 
