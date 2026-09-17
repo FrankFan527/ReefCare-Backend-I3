@@ -564,3 +564,82 @@ def test_my_reports_rejects_page_size_over_100(
     )
 
     assert response.status_code == 422
+
+
+def test_submit_report_whitespace_description_returns_json_safe_422(
+    client,
+):
+    """
+    F03 regression.
+
+    A whitespace-only description reaches ReportCreate's
+    model validator and raises ValueError.
+
+    The ValidationError context must not contain that raw
+    Python exception when FastAPI serialises the HTTP
+    response.
+
+    Before the fix this request reached validation
+    correctly, but serialising exc.errors() caused a
+    second exception and returned HTTP 500.
+    """
+
+    app.dependency_overrides[
+        require_observer
+    ] = override_observer
+
+    invalid_payload = """
+    {
+        "threatCategoryId": 1,
+        "observedAt": "2026-08-29T05:00:00Z",
+        "description": "   ",
+        "diveSessionId": 1,
+        "location": {
+            "namedDiveSiteId": 1,
+            "locationConfidence": "dive_site_only",
+            "locationSource": "named_dive_site"
+        }
+    }
+    """
+
+    response = client.post(
+        "/api/v1/reports",
+        data={
+            "payload":
+                invalid_payload,
+        },
+        files={
+            "photos": (
+                "test.jpg",
+                b"fake-image",
+                "image/jpeg",
+            )
+        },
+    )
+
+    assert (
+        response.status_code
+        == 422
+    )
+
+    body = response.json()
+
+    assert (
+        "detail"
+        in body
+    )
+
+    assert isinstance(
+        body["detail"],
+        list,
+    )
+
+    # Most importantly, FastAPI successfully serialised
+    # the validation response instead of producing F03's
+    # HTTP 500.
+    assert (
+        "Description must not be empty"
+        in str(
+            body["detail"]
+        )
+    )

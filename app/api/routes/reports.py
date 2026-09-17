@@ -493,12 +493,24 @@ async def submit_report(
         )
 
     except ValidationError as exc:
+        # F03:
+        # Pydantic model validators may place the original
+        # Python ValueError object inside ctx.error.
+        #
+        # That object is not JSON serialisable and caused
+        # FastAPI's error response itself to fail with 500.
+        #
+        # Removing validation context preserves the useful
+        # location/type/message/input fields while keeping
+        # the 422 response JSON-safe.
         raise HTTPException(
             status_code=(
                 status
                 .HTTP_422_UNPROCESSABLE_ENTITY
             ),
-            detail=exc.errors(),
+            detail=exc.errors(
+                include_context=False,
+            ),
         ) from exc
 
     except EvidenceTooLargeError as exc:

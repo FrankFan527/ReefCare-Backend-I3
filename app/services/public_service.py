@@ -101,6 +101,11 @@ async def build_report_handoff(
     handoff context for E2 -> authentication -> E4.
 
     No draft or private report is created here.
+
+    The reporting path must match the frontend's actual
+    report-entry route. F11 previously returned
+    /reports/new, which does not exist in the current
+    frontend application.
     """
 
     site = await get_public_site(
@@ -127,5 +132,5 @@ async def build_report_handoff(
             True,
 
         "reporting_path":
-            "/reports/new",
+            "/report-a-reef",
     }

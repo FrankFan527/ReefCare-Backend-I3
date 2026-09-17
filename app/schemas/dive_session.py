@@ -8,13 +8,25 @@
 # Field names follow the API contract in the backend doc, not the raw column
 # names. The repository aliases between them.
 # ---------------------------------------------------------------------------
-from datetime import date, datetime
+
+from datetime import (
+    date,
+    datetime,
+)
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, model_validator
+from pydantic import (
+    Field,
+    model_validator,
+)
 
 from app.schemas.common import APIModel
-MALAYSIA_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
+
+
+MALAYSIA_TIMEZONE = ZoneInfo(
+    "Asia/Kuala_Lumpur"
+)
+
 
 class DiveSiteSummary(APIModel):
     """
@@ -49,8 +61,13 @@ class DiveSessionResponse(APIModel):
     named_dive_site: DiveSiteSummary
 
     # optional approximate times, stored as time_in / time_out in the database
-    approximate_start_time: datetime | None = None
-    approximate_end_time: datetime | None = None
+    approximate_start_time: (
+        datetime | None
+    ) = None
+
+    approximate_end_time: (
+        datetime | None
+    ) = None
 
 
 class DiveSessionCreate(APIModel):
@@ -62,17 +79,30 @@ class DiveSessionCreate(APIModel):
     form short so that logging a dive does not feel like paperwork.
     """
 
-    named_dive_site_id: int = Field(gt=0)
+    named_dive_site_id: int = Field(
+        gt=0
+    )
+
     dive_date: date
 
     # optional; the service generates one when the observer leaves it blank
-    label: str | None = Field(default=None, max_length=100)
+    label: str | None = Field(
+        default=None,
+        max_length=100,
+    )
 
-    approximate_start_time: datetime | None = None
-    approximate_end_time: datetime | None = None
+    approximate_start_time: (
+        datetime | None
+    ) = None
+
+    approximate_end_time: (
+        datetime | None
+    ) = None
 
     @model_validator(mode="after")
-    def check_dive_date_is_not_in_the_future(self):
+    def check_dive_date_is_not_in_the_future(
+        self,
+    ):
         """
         A dive cannot have happened after today in Malaysia.
 
@@ -82,29 +112,84 @@ class DiveSessionCreate(APIModel):
         Using the actual local date removes both problems.
         """
 
-        the_today_in_malaysia = datetime.now(MALAYSIA_TIMEZONE).date()
+        the_today_in_malaysia = (
+            datetime.now(
+                MALAYSIA_TIMEZONE
+            ).date()
+        )
 
-        if self.dive_date > the_today_in_malaysia:
-            raise ValueError("dive_date cannot be in the future")
+        if (
+            self.dive_date
+            > the_today_in_malaysia
+        ):
+            raise ValueError(
+                "dive_date cannot be in the future"
+            )
 
         return self
 
     @model_validator(mode="after")
-    def check_times_are_in_order(self):
+    def check_times_are_in_order(
+        self,
+    ):
         """
-        Mirror the dive_session_time_order CHECK constraint.
+        Validate timezone information before comparing
+        approximate dive times.
 
-        Postgres would reject this anyway, but catching it here returns a
-        readable 422 naming the field instead of a raw database error.
+        F07 regression:
+        Python cannot compare a timezone-naive datetime
+        with a timezone-aware datetime. Previously a mixed
+        pair reached the '<' comparison and raised
+        TypeError, which surfaced as HTTP 500.
+
+        Both supplied timestamps must therefore be
+        timezone-aware. Invalid input is rejected by
+        Pydantic as HTTP 422 before database access.
+
+        Once both values are aware, Python safely compares
+        them even when they use different UTC offsets.
+
+        This also mirrors the dive_session_time_order
+        database constraint while returning a readable
+        client validation error first.
         """
+
+        start_time = (
+            self.approximate_start_time
+        )
+
+        end_time = (
+            self.approximate_end_time
+        )
 
         if (
-            self.approximate_start_time is not None
-            and self.approximate_end_time is not None
-            and self.approximate_end_time < self.approximate_start_time
+            start_time is not None
+            and start_time.utcoffset()
+            is None
         ):
             raise ValueError(
-                "approximate_end_time cannot be before approximate_start_time"
+                "approximate_start_time must "
+                "include a timezone"
+            )
+
+        if (
+            end_time is not None
+            and end_time.utcoffset()
+            is None
+        ):
+            raise ValueError(
+                "approximate_end_time must "
+                "include a timezone"
+            )
+
+        if (
+            start_time is not None
+            and end_time is not None
+            and end_time < start_time
+        ):
+            raise ValueError(
+                "approximate_end_time cannot be "
+                "before approximate_start_time"
             )
 
         return self
