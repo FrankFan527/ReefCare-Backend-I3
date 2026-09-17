@@ -1,11 +1,13 @@
 # ---------------------------------------------------------------------------
 # Case closure policy (US5.5, Iteration 2-compatible).
 #
-# The deployed database now uses closure_reason.is_selectable
-# as the live eligibility rule.
+# Normal coordinator closure requires a persisted US5.4
+# response decision.
 #
-# iteration_added remains descriptive/historical metadata
-# only.
+# The US5.3 not-substantiated assessment is different:
+# the evidence assessment itself is the decision-tree
+# outcome, so it has a dedicated closure helper that does
+# not manufacture an unnecessary US5.4 response decision.
 # ---------------------------------------------------------------------------
 
 from sqlalchemy.ext.asyncio import (
@@ -48,7 +50,6 @@ TERMINAL_STATUS_FOR_CLOSURE_REASON: dict[
     "logged_for_reference":
         "closed_logged",
 
-    # Iteration 2 action-completion closure.
     "resolved_acted_on":
         "closed_resolved",
 }
@@ -69,6 +70,19 @@ CLOSURE_REASON_FOR_RESPONSE_TYPE: dict[
 }
 
 
+NOT_SUBSTANTIATED_REASON = (
+    "not_substantiated"
+)
+
+NOT_SUBSTANTIATED_STATUS = (
+    "closed_not_substantiated"
+)
+
+DEFAULT_NOT_SUBSTANTIATED_NOTE = (
+    "Could not be confirmed from the evidence provided."
+)
+
+
 async def validate_closure_rules(
     db: AsyncSession,
     closure_reason_code: str,
@@ -82,9 +96,6 @@ async def validate_closure_rules(
     - exists
     - is currently selectable
     - carries a note when requires_note is true
-
-    closure_reason.is_selectable is now authoritative for
-    iteration eligibility.
     """
 
     reason = await get_closure_reason(
@@ -138,10 +149,6 @@ def validate_decision_closure_combination(
     """
     Prevent a closure reason that contradicts a mapped
     response decision.
-
-    intervention_required intentionally has no fixed
-    closure reason because the case may proceed through
-    action recording before resolved_acted_on.
     """
 
     if response_type is None:
@@ -171,6 +178,126 @@ def validate_decision_closure_combination(
         )
 
 
+async def close_not_substantiated_from_assessment(
+    db: AsyncSession,
+    report_reference: str,
+    coordinator_id: int,
+    assessment_note: (
+        str | None
+    ) = None,
+) -> dict:
+    """
+    Complete the US5.3 Q2=false path.
+
+    The evidence assessment itself is the decision-tree
+    outcome, so this path does not require a separate US5.4
+    response decision.
+
+    The caller owns the transaction. No commit occurs here,
+    allowing:
+
+        assessment row
+        + closure decision
+        + terminal status
+        + case event
+
+    to commit atomically.
+
+    not_substantiated requires a public-safe note in the
+    current reference table. Because assessment notes are
+    optional in the API contract, a safe default is used
+    when the coordinator leaves notes empty.
+    """
+
+    case = await load_owned_case(
+        db=db,
+        report_reference=(
+            report_reference
+        ),
+        coordinator_id=(
+            coordinator_id
+        ),
+    )
+
+    closure_note = (
+        assessment_note.strip()
+        if (
+            assessment_note
+            is not None
+            and assessment_note
+            .strip()
+            != ""
+        )
+        else
+        DEFAULT_NOT_SUBSTANTIATED_NOTE
+    )
+
+    await validate_closure_rules(
+        db=db,
+        closure_reason_code=(
+            NOT_SUBSTANTIATED_REASON
+        ),
+        public_closure_note=(
+            closure_note
+        ),
+    )
+
+    move_is_allowed = (
+        await transition_is_permitted(
+            db=db,
+            from_status_code=(
+                case[
+                    "status_code"
+                ]
+            ),
+            to_status_code=(
+                NOT_SUBSTANTIATED_STATUS
+            ),
+        )
+    )
+
+    if not move_is_allowed:
+        raise WorkflowError(
+            "A case in "
+            f"{case['status_code']} "
+            "cannot be closed as "
+            f"{NOT_SUBSTANTIATED_REASON}"
+        )
+
+    final_status = (
+        await close_report(
+            db=db,
+            report_reference=(
+                report_reference
+            ),
+            coordinator_id=(
+                coordinator_id
+            ),
+            closure_reason_code=(
+                NOT_SUBSTANTIATED_REASON
+            ),
+            terminal_status_code=(
+                NOT_SUBSTANTIATED_STATUS
+            ),
+            note=(
+                closure_note
+            ),
+            referred_to=None,
+        )
+    )
+
+    return {
+        "report_reference":
+            report_reference,
+
+        "status":
+            final_status,
+
+        "closure_reason_code":
+            NOT_SUBSTANTIATED_REASON,
+    }
+
+
 async def close_case(
     db: AsyncSession,
     report_reference: str,
@@ -184,8 +311,12 @@ async def close_case(
     ) = None,
 ) -> dict:
     """
-    Close an owned case through the sanctioned database
-    closure function.
+    Close an owned case through the normal sanctioned
+    closure workflow.
+
+    Unlike the US5.3 assessment-specific helper above,
+    this normal endpoint still requires a persisted US5.4
+    response decision.
     """
 
     case = await load_owned_case(
@@ -245,8 +376,7 @@ async def close_case(
         raise WorkflowError(
             "Closure reason "
             f"{closure_reason_code} "
-            "has no configured "
-            "terminal status"
+            "has no configured terminal status"
         )
 
     move_is_allowed = (

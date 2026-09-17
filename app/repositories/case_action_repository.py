@@ -1,18 +1,13 @@
 # ---------------------------------------------------------------------------
-# Conservation action persistence (US7.1 / API-11).
+# Conservation action persistence (US7.1 / API-11 / API-17).
 #
 # Repositories own SQL.
 #
 # Every case_action row is tied to one case_event.
-# Action evidence reuses that relationship:
 #
-# case_action.case_event_id
-#          =
-# evidence.case_event_id
-#
-# This makes an uploaded file traceable to the specific
-# action without creating a second action-evidence link
-# table.
+# created_by is the stable identity of the user who
+# recorded the action. created_by_name is resolved from
+# that identity and never from the report's current owner.
 # ---------------------------------------------------------------------------
 
 from datetime import date
@@ -32,10 +27,6 @@ async def get_action_type(
     db: AsyncSession,
     action_type_code: str,
 ) -> dict | None:
-    """
-    Return one action type or None when the code is unknown.
-    """
-
     result = await db.execute(
         text(
             """
@@ -76,11 +67,6 @@ async def get_action_type(
 async def list_selectable_action_types(
     db: AsyncSession,
 ) -> list[dict]:
-    """
-    Return action types currently selectable by a
-    coordinator.
-    """
-
     result = await db.execute(
         text(
             """
@@ -121,13 +107,6 @@ async def insert_standalone_action_event(
         str | None
     ),
 ) -> int:
-    """
-    Write an action_recorded event without moving status.
-
-    Used when a case already sits in the target action
-    status.
-    """
-
     result = await db.execute(
         text(
             """
@@ -174,7 +153,8 @@ async def insert_standalone_action_event(
     )
 
     return (
-        result.scalar_one()
+        result
+        .scalar_one()
     )
 
 
@@ -183,11 +163,6 @@ async def get_latest_action_event_id(
     report_reference: str,
     coordinator_id: int,
 ) -> int | None:
-    """
-    Locate the latest action_recorded event created for this
-    report by the current coordinator.
-    """
-
     result = await db.execute(
         text(
             """
@@ -229,7 +204,8 @@ async def get_latest_action_event_id(
     )
 
     return (
-        result.scalar_one()
+        result
+        .scalar_one()
     )
 
 
@@ -251,54 +227,78 @@ async def save_case_action(
     created_by: int,
 ) -> dict:
     """
-    Insert one append-only case_action row.
+    Insert one append-only action row and resolve the
+    display name from case_action.created_by.
 
-    The caller commits.
+    LEFT JOIN deliberately permits a legacy/missing user to
+    return created_by_name = NULL without hiding the action.
     """
 
     result = await db.execute(
         text(
             """
-            INSERT INTO case_action
-                (
-                    report_id,
+            WITH inserted_action AS (
+                INSERT INTO case_action
+                    (
+                        report_id,
+                        case_event_id,
+                        action_type_id,
+                        action_state,
+                        action_date,
+                        responsible_team,
+                        notes,
+                        created_by
+                    )
+
+                SELECT
+                    r.report_id,
+                    :case_event_id,
+                    :action_type_id,
+                    :action_state,
+                    :action_date,
+                    :responsible_team,
+                    :notes,
+                    :created_by
+
+                FROM report AS r
+
+                WHERE
+                    r.report_reference =
+                        :report_reference
+
+                    AND r.deleted_at
+                        IS NULL
+
+                RETURNING
+                    case_action_id,
                     case_event_id,
-                    action_type_id,
                     action_state,
                     action_date,
                     responsible_team,
                     notes,
-                    created_by
-                )
+                    created_by,
+                    created_at
+            )
 
             SELECT
-                r.report_id,
-                :case_event_id,
-                :action_type_id,
-                :action_state,
-                :action_date,
-                :responsible_team,
-                :notes,
-                :created_by
+                ia.case_action_id,
+                ia.case_event_id,
+                ia.action_state,
+                ia.action_date,
+                ia.responsible_team,
+                ia.notes,
+                ia.created_by,
 
-            FROM report AS r
+                u.display_name
+                    AS created_by_name,
 
-            WHERE
-                r.report_reference =
-                    :report_reference
+                ia.created_at
 
-                AND r.deleted_at
-                    IS NULL
+            FROM inserted_action AS ia
 
-            RETURNING
-                case_action_id,
-                case_event_id,
-                action_state,
-                action_date,
-                responsible_team,
-                notes,
-                created_by,
-                created_at
+            LEFT JOIN app_user AS u
+                ON u.user_id =
+                   ia.created_by
             """
         ),
         {
@@ -346,11 +346,6 @@ async def list_case_actions(
     db: AsyncSession,
     report_reference: str,
 ) -> list[dict]:
-    """
-    Return every action recorded against one report,
-    oldest first.
-    """
-
     result = await db.execute(
         text(
             """
@@ -432,13 +427,6 @@ async def get_case_action_for_report(
     report_reference: str,
     action_id: int,
 ) -> dict | None:
-    """
-    Return an action only when it belongs to the requested
-    live report.
-
-    This prevents action IDs being attached across cases.
-    """
-
     result = await db.execute(
         text(
             """
@@ -497,14 +485,6 @@ async def save_action_evidence(
     file_reference: str,
     file_size_bytes: int,
 ) -> dict | None:
-    """
-    Insert private evidence metadata attached to an action's
-    case event.
-
-    file_reference remains internal and is never returned
-    by the API response schema.
-    """
-
     result = await db.execute(
         text(
             """
@@ -598,11 +578,6 @@ async def list_action_evidence_metadata(
     db: AsyncSession,
     report_reference: str,
 ) -> list[dict]:
-    """
-    Return safe evidence metadata grouped by the action
-    sharing the same case_event.
-    """
-
     result = await db.execute(
         text(
             """

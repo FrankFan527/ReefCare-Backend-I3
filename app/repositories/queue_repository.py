@@ -4,51 +4,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 async def list_incoming_reports(
     db: AsyncSession,
+    coordinator_id: int,
     page: int,
     page_size: int,
 ):
     """
     Return the active coordinator queue.
 
-    Iteration 1 US5.1 requires submitted reports to remain
-    visible with their current status.
+    Unclaimed intake reports remain visible to all
+    coordinators.
 
-    The queue includes active reports from initial receipt
-    through coordinator review/routing, while terminal
-    closed reports are excluded.
+    Once a report is claimed, the active case remains
+    visible only to the coordinator who currently owns it.
+
+    Iteration 2 action-stage statuses remain active until
+    an explicit terminal closure succeeds:
+
+    - response_recommended
+    - response_planned
+    - response_complete
+
+    Terminal closed reports are excluded and belong in the
+    closed-case history API.
 
     Only queue-safe fields are selected. Precise
     coordinates and private evidence are never returned
     through this query.
 
-    Iteration 2 US5.1 AC1 adds an evidence-completeness
-    indicator and a priority cue. Neither is stored. This
-    query returns the raw signals they are derived from,
-    and triage_priority_service turns those into the two
-    displayed values.
-
-    Three of the signals are deliberately reduced to counts
-    and booleans here rather than returned whole:
-
-      evidence_count       counts the files, and returns
-                           no storage key or filename
-
-      has_location_detail  says whether the coordinator
-                           could find the site again, but
-                           never returns the coordinates,
-                           which stay behind the location
-                           access rules
-
-      description_length   says whether enough was written
-                           to review, without putting the
-                           description itself into a queue
-                           response
+    US5.1 / US5.7 triage values are derived later by
+    triage_priority_service.
     """
 
-    offset = (page - 1) * page_size
+    offset = (
+        page - 1
+    ) * page_size
 
-    active_status_codes = (
-        "received",
+    active_owned_status_codes = (
         "claimed",
         "under_review",
         "needs_more_info",
@@ -56,6 +47,8 @@ async def list_incoming_reports(
         "monitoring",
         "referred",
         "response_recommended",
+        "response_planned",
+        "response_complete",
     )
 
     result = await db.execute(
@@ -65,9 +58,6 @@ async def list_incoming_reports(
                 r.report_reference,
 
                 tc.label AS threat,
-
-                -- the code drives the US5.7 threat rule,
-                -- the label is what the coordinator reads
                 tc.code AS threat_code,
 
                 ds.public_area_label AS area,
@@ -89,32 +79,39 @@ async def list_incoming_reports(
                     AS INTEGER
                 ) AS hours_in_queue,
 
-                -- US5.1 AC1 evidence-completeness signals
-                COALESCE(ev.evidence_count, 0)
-                    AS evidence_count,
+                COALESCE(
+                    ev.evidence_count,
+                    0
+                ) AS evidence_count,
 
-                -- true when the coordinator has some way to
-                -- relocate the threat: either a dropped pin
-                -- or written relocation notes. The values
-                -- themselves are never selected.
                 (
-                    rl.report_location_id IS NOT NULL
+                    rl.report_location_id
+                        IS NOT NULL
+
                     AND (
-                        rl.latitude IS NOT NULL
+                        rl.latitude
+                            IS NOT NULL
+
                         OR COALESCE(
-                            BTRIM(rl.relocation_notes),
+                            BTRIM(
+                                rl.relocation_notes
+                            ),
                             ''
                         ) <> ''
                     )
                 ) AS has_location_detail,
 
-                LENGTH(BTRIM(r.description))
-                    AS description_length,
+                LENGTH(
+                    BTRIM(
+                        r.description
+                    )
+                ) AS description_length,
 
                 r.claimed_by_user_id,
                 r.claimed_at,
 
-                u.display_name AS owner_display_name
+                u.display_name
+                    AS owner_display_name
 
             FROM report AS r
 
@@ -142,28 +139,49 @@ async def list_incoming_reports(
                 ON u.user_id =
                    r.claimed_by_user_id
 
-            -- LATERAL rather than a GROUP BY: the queue
-            -- selects a wide row per report, and grouping
-            -- would force every column into the GROUP BY
-            -- clause for the sake of one count.
             LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS evidence_count
+                SELECT
+                    COUNT(*)
+                        AS evidence_count
+
                 FROM evidence AS e
-                WHERE e.report_id = r.report_id
-            ) AS ev ON TRUE
+
+                WHERE
+                    e.report_id =
+                        r.report_id
+            ) AS ev
+                ON TRUE
 
             WHERE
                 r.deleted_at IS NULL
 
-                AND cs.code IN (
-                    'received',
-                    'claimed',
-                    'under_review',
-                    'needs_more_info',
-                    'evidence_accepted',
-                    'monitoring',
-                    'referred',
-                    'response_recommended'
+                AND (
+                    (
+                        cs.code = 'received'
+
+                        AND
+                        r.claimed_by_user_id
+                            IS NULL
+                    )
+
+                    OR
+
+                    (
+                        r.claimed_by_user_id =
+                            :coordinator_id
+
+                        AND cs.code IN (
+                            'claimed',
+                            'under_review',
+                            'needs_more_info',
+                            'evidence_accepted',
+                            'monitoring',
+                            'referred',
+                            'response_recommended',
+                            'response_planned',
+                            'response_complete'
+                        )
+                    )
                 )
 
             ORDER BY
@@ -175,17 +193,28 @@ async def list_incoming_reports(
             """
         ),
         {
-            "limit": page_size,
-            "offset": offset,
+            "coordinator_id":
+                coordinator_id,
+
+            "limit":
+                page_size,
+
+            "offset":
+                offset,
         },
     )
 
-    rows = result.mappings().all()
+    rows = (
+        result
+        .mappings()
+        .all()
+    )
 
     count_result = await db.execute(
         text(
             """
-            SELECT COUNT(*)
+            SELECT
+                COUNT(*)
 
             FROM report AS r
 
@@ -196,20 +225,48 @@ async def list_incoming_reports(
             WHERE
                 r.deleted_at IS NULL
 
-                AND cs.code IN (
-                    'received',
-                    'claimed',
-                    'under_review',
-                    'needs_more_info',
-                    'evidence_accepted',
-                    'monitoring',
-                    'referred',
-                    'response_recommended'
+                AND (
+                    (
+                        cs.code = 'received'
+
+                        AND
+                        r.claimed_by_user_id
+                            IS NULL
+                    )
+
+                    OR
+
+                    (
+                        r.claimed_by_user_id =
+                            :coordinator_id
+
+                        AND cs.code IN (
+                            'claimed',
+                            'under_review',
+                            'needs_more_info',
+                            'evidence_accepted',
+                            'monitoring',
+                            'referred',
+                            'response_recommended',
+                            'response_planned',
+                            'response_complete'
+                        )
+                    )
                 )
             """
-        )
+        ),
+        {
+            "coordinator_id":
+                coordinator_id,
+        },
     )
 
-    total = count_result.scalar_one()
+    total = (
+        count_result
+        .scalar_one()
+    )
 
-    return rows, total
+    return (
+        rows,
+        total,
+    )

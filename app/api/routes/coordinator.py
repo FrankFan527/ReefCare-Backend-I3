@@ -66,15 +66,27 @@ async def get_queue(
     Authentication and coordinator-role checks are enforced
     through CurrentCoordinator.
 
-    The queue contains active submitted reports and exposes
-    only queue-safe general information, current status and
-    ownership details.
+    Unclaimed received reports remain visible to all
+    coordinators.
+
+    Once a report has been claimed, non-terminal workflow
+    states remain visible only to the coordinator who
+    currently owns the case.
+
+    Iteration 2 action-stage cases remain active through
+    response_planned and response_complete until an
+    explicit terminal closure succeeds.
 
     Precise coordinates and private evidence are excluded.
     """
 
+    coordinator_id = current_coordinator[
+        "user_id"
+    ]
+
     return await list_incoming_reports(
         db=db,
+        coordinator_id=coordinator_id,
         page=page,
         page_size=page_size,
     )

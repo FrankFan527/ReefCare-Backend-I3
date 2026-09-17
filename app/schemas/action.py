@@ -20,17 +20,13 @@ from app.schemas.common import (
 class ActionTypeOption(APIModel):
     code: str
     label: str
-    description: str | None = None
+
+    description: (
+        str | None
+    ) = None
 
 
 class ActionEvidenceSummary(APIModel):
-    """
-    Safe metadata for evidence attached to one
-    conservation action.
-
-    file_reference is deliberately absent.
-    """
-
     evidence_id: int
     media_type: str
 
@@ -44,11 +40,6 @@ class ActionEvidenceSummary(APIModel):
 class ActionEvidenceResponse(
     ActionEvidenceSummary
 ):
-    """
-    Confirmation that one private evidence file was
-    attached to an action.
-    """
-
     case_action_id: int
 
 
@@ -78,13 +69,16 @@ class ActionCreate(APIModel):
         max_length=2000,
     )
 
-    @model_validator(mode="after")
+    @model_validator(
+        mode="after"
+    )
     def action_taken_requires_date(
         self,
     ):
         if (
             self.action_state
             == ActionState.ACTION_TAKEN
+
             and self.action_date
             is None
         ):
@@ -121,11 +115,20 @@ class ActionResponse(APIModel):
 
     status_code: CaseStatus
 
-    created_by: int
+    created_by: int = Field(
+        examples=[
+            42
+        ]
+    )
 
     created_by_name: (
         str | None
-    ) = None
+    ) = Field(
+        default=None,
+        examples=[
+            "Coordinator One"
+        ],
+    )
 
     created_at: datetime
 

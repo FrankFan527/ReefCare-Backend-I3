@@ -1,12 +1,5 @@
 # ---------------------------------------------------------------------------
-# Conservation action policy (US7.1 / API-11).
-#
-# Services decide whether an action is allowed;
-# repositories perform persistence.
-#
-# API-11 extends this service with private evidence
-# attachment while preserving the existing append-only
-# action model.
+# Conservation action policy (US7.1 / API-11 / API-17).
 # ---------------------------------------------------------------------------
 
 from datetime import date
@@ -54,7 +47,7 @@ from app.services.evidence_service import (
 )
 
 
-ACTION_EVENT_TYPE: str = (
+ACTION_EVENT_TYPE = (
     "action_recorded"
 )
 
@@ -91,14 +84,6 @@ def validate_action_state_against_case(
     action_state: str,
     current_status_code: str,
 ) -> None:
-    """
-    Check whether this action state may be recorded from
-    the case's current status.
-
-    PostgreSQL remains authoritative for actual status
-    transitions.
-    """
-
     permitted = (
         PERMITTED_STATUSES_FOR_ACTION_STATE
         .get(
@@ -129,18 +114,11 @@ async def load_selectable_action_type(
     db: AsyncSession,
     action_type_code: str,
 ) -> dict:
-    """
-    Resolve one action type and confirm it is currently
-    selectable.
-    """
-
-    action_type = (
-        await get_action_type(
-            db=db,
-            action_type_code=(
-                action_type_code
-            ),
-        )
+    action_type = await get_action_type(
+        db=db,
+        action_type_code=(
+            action_type_code
+        ),
     )
 
     if action_type is None:
@@ -177,18 +155,6 @@ async def record_action(
         str | None
     ),
 ) -> dict:
-    """
-    Record one append-only conservation action on an owned
-    case.
-
-    If the action changes case status,
-    reefcare_change_status() creates the associated
-    action_recorded case_event.
-
-    If the case is already in the target state, a
-    standalone append-only action event is created instead.
-    """
-
     case = await load_owned_case(
         db=db,
         report_reference=(
@@ -204,7 +170,9 @@ async def record_action(
             action_state
         ),
         current_status_code=(
-            case["status_code"]
+            case[
+                "status_code"
+            ]
         ),
     )
 
@@ -224,7 +192,9 @@ async def record_action(
     )
 
     case_moves = (
-        case["status_code"]
+        case[
+            "status_code"
+        ]
         != target_status
     )
 
@@ -274,7 +244,9 @@ async def record_action(
 
     else:
         resulting_status = (
-            case["status_code"]
+            case[
+                "status_code"
+            ]
         )
 
         case_event_id = (
@@ -323,6 +295,11 @@ async def record_action(
             coordinator_id
         ),
     )
+
+    if not saved:
+        raise DatabaseOperationError(
+            "The action could not be recorded"
+        )
 
     return {
         "case_action_id":
@@ -377,7 +354,9 @@ async def record_action(
             ],
 
         "created_by_name":
-            None,
+            saved[
+                "created_by_name"
+            ],
 
         "created_at":
             saved[
@@ -394,11 +373,6 @@ async def list_actions_for_owned_case(
     report_reference: str,
     coordinator_id: int,
 ) -> list[dict]:
-    """
-    Return all actions plus safe attachment metadata for an
-    owned case.
-    """
-
     await load_owned_case(
         db=db,
         report_reference=(
@@ -467,13 +441,13 @@ async def list_actions_for_owned_case(
             action
         )
 
-        item["evidence"] = (
-            by_action.get(
-                item[
-                    "case_action_id"
-                ],
-                [],
-            )
+        item[
+            "evidence"
+        ] = by_action.get(
+            item[
+                "case_action_id"
+            ],
+            [],
         )
 
         result.append(
@@ -490,26 +464,6 @@ async def attach_evidence_to_action(
     coordinator_id: int,
     photo: UploadFile,
 ) -> dict:
-    """
-    Store one private image against a specific conservation
-    action.
-
-    Security/order:
-
-    1. Verify current case ownership.
-    2. Verify action belongs to the same report.
-    3. Validate the upload.
-    4. Store the private file.
-    5. Insert evidence metadata with case_event_id and
-       uploaded_by_user_id.
-    6. Commit.
-
-    If the database write fails after storage succeeded,
-    the stored object is deleted best-effort.
-
-    No action state or case status is changed.
-    """
-
     await load_owned_case(
         db=db,
         report_reference=(
@@ -537,8 +491,10 @@ async def attach_evidence_to_action(
             "Action not found"
         )
 
-    content = await validate_photo(
-        photo
+    content = (
+        await validate_photo(
+            photo
+        )
     )
 
     stored_file = (
@@ -630,12 +586,6 @@ async def attach_evidence_to_action(
 async def list_action_type_options(
     db: AsyncSession,
 ) -> list[dict]:
-    """
-    Return currently selectable action type reference data.
-    """
-
-    return (
-        await list_selectable_action_types(
-            db=db
-        )
+    return await list_selectable_action_types(
+        db=db
     )
