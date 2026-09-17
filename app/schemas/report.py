@@ -1,4 +1,5 @@
 from datetime import (
+    date,
     datetime,
     timezone,
 )
@@ -651,6 +652,13 @@ class ThreatCategoryResponse(APIModel):
 
     safety_reminder: (
         str | None
+    ) = None
+    source_reference: (
+        str | None
+    ) = None
+
+    last_reviewed_at: (
+        date | None
     ) = None
 
     icon_reference: (

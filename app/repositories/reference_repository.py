@@ -29,8 +29,13 @@ async def list_active_threat_categories(
                 short_explanation,
                 useful_evidence,
                 safety_reminder,
-                icon_reference
+                icon_reference,
 
+                -- F10. Returned even when null, so the interface can show
+                -- that a fact has no recorded source rather than silently
+                -- presenting it as though it did.
+                source_reference,
+                last_reviewed_at
             FROM threat_category
 
             WHERE
