@@ -201,6 +201,7 @@ async def create_managed_user(
 async def update_managed_user(
     db: AsyncSession,
     user_id: int,
+    acting_admin_id: int,
     display_name: str | None,
     is_active: bool | None,
 ):
@@ -208,34 +209,37 @@ async def update_managed_user(
     Update administrator-editable account fields.
 
     Role changes are intentionally excluded.
+
+    Routed through reefcare_update_user_profile() rather than a direct UPDATE.
+    reefcare_app holds SELECT and INSERT on app_user and deliberately no
+    UPDATE, because that table carries the password hash. A direct UPDATE is
+    refused by PostgreSQL and surfaces as a 500.
+
+    This was not caught locally because development connects as the database
+    owner, which bypasses every grant in the schema.
     """
 
     result = await db.execute(
         text(
             """
-            UPDATE app_user
+            SELECT
+                user_id,
+                email,
+                display_name,
+                role_code,
+                is_active
 
-            SET
-                display_name =
-                    COALESCE(
-                        :display_name,
-                        display_name
-                    ),
-
-                is_active =
-                    COALESCE(
-                        :is_active,
-                        is_active
-                    )
-
-            WHERE
-                user_id = :user_id
-
-            RETURNING user_id
+            FROM reefcare_update_user_profile(
+                :user_id,
+                :acting_admin_id,
+                :display_name,
+                :is_active
+            )
             """
         ),
         {
             "user_id": user_id,
+            "acting_admin_id": acting_admin_id,
             "display_name": display_name,
             "is_active": is_active,
         },
@@ -247,40 +251,46 @@ async def update_managed_user(
         .first()
     )
 
-
 async def approve_coordinator_role(
     db: AsyncSession,
     user_id: int,
+    acting_admin_id: int,
 ):
     """
-    Persist coordinator access by changing the user's
-    canonical PostgreSQL role.
+    Persist coordinator access by changing the user's canonical PostgreSQL
+    role.
 
-    The dedicated endpoint is the only normal admin API path
-    for coordinator promotion.
+    The dedicated endpoint is the only normal admin API path for coordinator
+    promotion.
+
+    Routed through reefcare_approve_coordinator() for the same reason as
+    update_managed_user above: the application role cannot UPDATE app_user.
+
+    The function enforces more than the previous UPDATE did. It promotes only
+    from observer, so calling it on an administrator cannot silently demote
+    them, and it refuses a deactivated target, which would otherwise create a
+    coordinator who cannot log in.
     """
 
     result = await db.execute(
         text(
             """
-            UPDATE app_user AS u
+            SELECT
+                user_id,
+                email,
+                display_name,
+                role_code,
+                is_active
 
-            SET role_id = (
-                SELECT role_id
-                FROM app_role
-                WHERE code =
-                    'case_coordinator'
+            FROM reefcare_approve_coordinator(
+                :user_id,
+                :acting_admin_id
             )
-
-            WHERE
-                u.user_id = :user_id
-
-            RETURNING
-                u.user_id
             """
         ),
         {
             "user_id": user_id,
+            "acting_admin_id": acting_admin_id,
         },
     )
 

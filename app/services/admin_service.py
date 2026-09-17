@@ -163,10 +163,10 @@ async def update_admin_managed_user(
         await update_managed_user(
             db=db,
             user_id=user_id,
+            acting_admin_id=acting_admin_id,
             display_name=display_name,
             is_active=is_active,
         )
-
         await db.commit()
 
     except SQLAlchemyError as exc:
@@ -239,6 +239,7 @@ async def approve_case_coordinator(
         updated = await approve_coordinator_role(
             db=db,
             user_id=user_id,
+            acting_admin_id=acting_admin_id,
         )
 
         if updated is None:
