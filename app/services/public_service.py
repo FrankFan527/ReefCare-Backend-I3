@@ -123,9 +123,27 @@ async def build_report_handoff(
         "public_area_label":
             site["public_area_label"],
 
+        # Published site centre, returned so the public map plots the real
+        # position rather than a hardcoded one. Nullable: a site added later
+        # may not have been sourced, and an absent coordinate is a truthful
+        # answer rather than a gap to fill.
+        "centre_latitude":
+            site["centre_latitude"],
+
+        "centre_longitude":
+            site["centre_longitude"],
+
+        # Returned with the coordinate, never without it. This is the radius a
+        # dive-site-only report actually covers.
+        "default_uncertainty_metres":
+            site["default_uncertainty_metres"],
+
         "requires_authentication":
             True,
 
+        # F11. The frontend route is /report-a-reef; /reports/new was never a
+        # real path, so the handoff was sending visitors nowhere. Confirmed
+        # with the frontend owner on 17 September 2026.
         "reporting_path":
-            "/reports/new",
+            "/report-a-reef",
     }

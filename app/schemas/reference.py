@@ -17,3 +17,13 @@ class DiveSiteResponse(APIModel):
     public_area_label: str
 
     region: str | None = None
+
+    # The published centre of a named site, not a report location. Nullable
+    # because a site added later may not have been sourced yet, and an absent
+    # coordinate is a truthful answer rather than a gap to fill.
+    centre_latitude: float | None = None
+    centre_longitude: float | None = None
+
+    # How large the site is. Returned with the coordinate so the interface can
+    # show the area a dive-site-only report covers rather than a false point.
+    default_uncertainty_metres: int | None = None

@@ -53,6 +53,18 @@ class PublicReportHandoffResponse(APIModel):
     selected_dive_site_name: str
     public_area_label: str
 
+    # Published site centre, so the public map plots the real position rather
+    # than a hardcoded one. Nullable because a site added later may not have
+    # been sourced yet, and an absent coordinate is a truthful answer rather
+    # than a gap to fill.
+    centre_latitude: float | None = None
+    centre_longitude: float | None = None
+
+    # Returned with the coordinate and never without it. This is the radius a
+    # dive-site-only report actually covers, and a pin drawn without it claims
+    # a precision nobody supplied.
+    default_uncertainty_metres: int | None = None
+
     requires_authentication: bool = True
 
     reporting_path: str = "/reports/new"

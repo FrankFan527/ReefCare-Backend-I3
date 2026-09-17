@@ -57,12 +57,24 @@ async def list_active_dive_sites(
     """
     Return named dive sites that an observer may select.
 
-    Precise centre coordinates are deliberately excluded
-    from this public/reference projection.
+    Centre coordinates are included. They were excluded in Iteration 1 for a
+    reason that no longer holds: every row was NULL, so returning them would
+    have offered a field that was never populated.
 
-    is_verified is currently not used as a filter because
-    existing seeded sites have not yet had authoritative
-    centre coordinates populated.
+    A dive site centre is public reference data. It is the published position
+    of a named site that appears on every operator's website, and it is a
+    different thing from a report's precise location, which stays behind
+    reefcare_report_location(). Returning a site centre does not weaken the
+    location privacy model.
+
+    default_uncertainty_metres travels with the coordinate rather than being
+    optional. When an observer chooses dive-site-only, the report is
+    represented at the site centre with that radius, and a coordinate served
+    without its radius invites the interface to plot a point that claims a
+    precision nobody supplied.
+
+    is_verified is not used as a filter. It now means the coordinates have
+    been sourced, and every row is true, so filtering would change nothing.
     """
 
     result = await db.execute(
@@ -72,7 +84,11 @@ async def list_active_dive_sites(
                 dive_site_id,
                 name,
                 public_area_label,
-                region
+                region,
+
+                centre_latitude,
+                centre_longitude,
+                default_uncertainty_metres
 
             FROM dive_site
 
