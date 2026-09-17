@@ -38,6 +38,7 @@ async def get_users(
     page: int = Query(
         default=1,
         ge=1,
+        le=10_000,
     ),
     page_size: int = Query(
         default=20,
