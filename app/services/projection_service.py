@@ -148,13 +148,24 @@ def build_coordinator_case_projection(
         ],
     )
 
-    # US5.2 AC2. Null throughout Iteration 2 until US5.6
-    # exists. is_unverified_ai_output is set here rather
-    # than left to the caller so the flag cannot be omitted
-    # by whoever wires the brief in later.
+    # US5.2 AC2. The caller supplies this already built, because it
+    # now carries the Observer's per-field decisions and the service
+    # is the only layer that has them.
+    #
+    # A dict is still accepted for the earlier shape, which carried
+    # only a triage brief. Either way is_unverified_ai_output is
+    # forced true here rather than trusted from the caller, so the
+    # flag cannot be omitted by whoever wires a brief in later.
     ai_assisted_context = None
 
-    if ai_assisted is not None:
+    if isinstance(ai_assisted, AIAssistedContext):
+        ai_assisted_context = ai_assisted.model_copy(
+            update={
+                "is_unverified_ai_output": True,
+            }
+        )
+
+    elif ai_assisted is not None:
         ai_assisted_context = AIAssistedContext(
             triage_brief=ai_assisted.get(
                 "triage_brief"

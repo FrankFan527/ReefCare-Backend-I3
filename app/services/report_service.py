@@ -589,6 +589,14 @@ async def submit_report(
                 ],
         }
 
+        # US5.2. Written inside the submission transaction so the report and
+        # the Observer's decisions about each AI suggestion commit together.
+        await report_repository.save_reviewed_ai_suggestions(
+            db=db,
+            report_reference=report_reference,
+            suggestions=report_data.ai_suggestions,
+        )
+
         await db.commit()
 
         return response

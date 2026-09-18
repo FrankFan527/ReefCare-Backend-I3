@@ -21,11 +21,21 @@ from app.repositories.evidence_repository import (
 from app.repositories.location_repository import (
     get_report_location,
 )
+from app.repositories.report_repository import (
+    get_reviewed_ai_suggestions,
+)
+from app.schemas.case import (
+    AIAssistedContext,
+    AISuggestionSummary,
+)
 from app.services.information_service import (
     get_information_exchange,
 )
 from app.services.projection_service import (
     build_coordinator_case_projection,
+)
+from app.services.smart_report_service import (
+    _FIELD_LABELS,
 )
 
 
@@ -74,6 +84,7 @@ async def get_coordinator_case(
     - authorised precise location
     - safe evidence metadata
     - latest saved US5.4 response decision, when one exists
+    - what the Observer decided about each AI suggestion
 
     No decision is a valid state and returns
     latestDecision = null.
@@ -115,17 +126,73 @@ async def get_coordinator_case(
         )
     )
 
+    # US5.2. What the Observer decided about each AI suggestion
+    # before submitting. Only confirmed and corrected entries are
+    # returned: a removed suggestion was rejected by the Observer,
+    # so it describes nothing about this report.
+    #
+    # available is false when a report carries none, which is every
+    # report submitted before this was built. The block is still
+    # returned rather than omitted, so the interface can state that
+    # a report had no AI assistance rather than leaving the
+    # Coordinator to infer it from a missing field.
+    reviewed_suggestions = (
+        await get_reviewed_ai_suggestions(
+            db=db,
+            report_reference=report_reference,
+        )
+    )
+
+    ai_assisted = AIAssistedContext(
+        available=bool(
+            reviewed_suggestions
+        ),
+
+        source=(
+            "smart_report_structuring"
+            if reviewed_suggestions
+            else None
+        ),
+
+        # Not captured anywhere. The submission contract carries
+        # field, value and status, and no timestamp, so there is
+        # nothing to return. Substituting the submission time would
+        # answer a different question under this label.
+        generated_at=None,
+
+        is_unverified_ai_output=True,
+
+        suggestions=[
+            AISuggestionSummary(
+                field=row["field"],
+
+                # Derived from the Smart Report field map rather
+                # than stored, so a wording change lands in one
+                # place instead of two.
+                label=_FIELD_LABELS.get(
+                    row["field"],
+                    row["field"],
+                ),
+
+                value=row["suggested_value"],
+
+                status=row["status"],
+            )
+            for row in reviewed_suggestions
+        ],
+    )
+
     # US5.2 AC2. US5.6 v2.2 is a separate geographic-analysis API. Fetch optional
     # hotspot-context independently so an analysis failure cannot block review.
-    # AI-assisted assessment content remains unimplemented.
     return build_coordinator_case_projection(
         case=case,
         location=location,
         evidence_rows=evidence_rows,
         latest_decision=latest_decision,
         information_exchange=information_exchange,
-        ai_assisted=None,
+        ai_assisted=ai_assisted,
     )
+
 
 async def set_case_under_review(
     db: AsyncSession,
