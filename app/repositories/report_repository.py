@@ -759,3 +759,100 @@ async def get_report_timeline(
     )
 
     return result.mappings().all()
+
+
+async def save_reviewed_ai_suggestions(
+    db: AsyncSession,
+    report_reference: str,
+    suggestions: list,
+) -> int:
+    """
+    Persist what the Observer decided about each AI suggestion (US5.2).
+
+    Called inside the submission transaction, after reefcare_submit_report()
+    has returned and before the commit. Both therefore land together: a report
+    cannot exist with its suggestions missing, and suggestions cannot exist
+    without their report.
+
+    The report is resolved by reference inside the INSERT rather than by a
+    separate SELECT, so there is no window between looking the report up and
+    writing against it.
+
+    'removed' entries are stored. They are filtered out on read, because a
+    rejected suggestion describes nothing about the report, but they are a true
+    record of what the model proposed and what the Observer did about it.
+
+    The caller commits.
+    """
+
+    if not suggestions:
+        return 0
+
+    inserted = 0
+
+    for suggestion in suggestions:
+        await db.execute(
+            text(
+                """
+                INSERT INTO report_ai_suggestion
+                    (report_id, field, suggested_value, status)
+                SELECT
+                    r.report_id,
+                    :field,
+                    :suggested_value,
+                    :status
+                FROM report AS r
+                WHERE r.report_reference = :report_reference
+                """
+            ),
+            {
+                "report_reference": report_reference,
+                "field": suggestion.field,
+                "suggested_value": suggestion.suggested_value,
+                "status": suggestion.status,
+            },
+        )
+
+        inserted += 1
+
+    return inserted
+
+
+async def get_reviewed_ai_suggestions(
+    db: AsyncSession,
+    report_reference: str,
+) -> list:
+    """
+    Return the Observer-reviewed suggestions for one report (US5.2).
+
+    Only confirmed and corrected entries are returned. A removed suggestion was
+    rejected by the Observer, so presenting it to a Coordinator alongside
+    submitted values would imply it describes the report when it does not.
+
+    Ordered by field so the Coordinator sees the same sequence every time.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                s.field,
+                s.suggested_value,
+                s.status
+
+            FROM report_ai_suggestion AS s
+            JOIN report AS r ON r.report_id = s.report_id
+
+            WHERE
+                r.report_reference = :report_reference
+                AND s.status IN ('confirmed', 'corrected')
+
+            ORDER BY s.field
+            """
+        ),
+        {
+            "report_reference": report_reference,
+        },
+    )
+
+    return result.mappings().all()

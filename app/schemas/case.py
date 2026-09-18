@@ -201,24 +201,61 @@ class CaseTriageContext(APIModel):
     hours_in_queue: int
 
 
+class AISuggestionSummary(APIModel):
+    """
+    One field the Observer reviewed before submitting (US5.2).
+
+    The value is what the Observer ended up with, not what the model proposed.
+    status is what tells the two apart.
+    """
+
+    field: str
+
+    label: str
+
+    value: str | None = None
+
+    # confirmed if accepted unchanged, corrected if the Observer edited it.
+    # Removed suggestions are stored but never returned: the Observer rejected
+    # them, so they describe nothing about this report.
+    status: str
+
+
 class AIAssistedContext(APIModel):
     """
-    AI output remains structurally separate from Observer
-    statements and Coordinator decisions.
+    AI output remains structurally separate from Observer statements and
+    Coordinator decisions.
+
+    This block says what a model proposed and what the Observer did about it.
+    It says nothing about whether the reported threat is really there. No
+    Coordinator workflow reads it, and nothing here can move a case.
     """
+
+    available: bool = False
 
     triage_brief: (
         str | None
     ) = None
 
+    # Null on every report. When Smart Report Structuring produced the
+    # suggestions is not captured anywhere: the submission contract carries
+    # field, value and status, and no timestamp. Returning the submission time
+    # would answer a different question under this label.
     generated_at: (
         datetime | None
     ) = None
 
-    is_unverified_ai_output: (
-        bool
-    ) = True
+    source: (
+        str | None
+    ) = None
 
+    is_unverified_ai_output: bool = True
+
+    suggestions: list[
+        AISuggestionSummary
+    ] = Field(
+        default_factory=list,
+    )
 
 class InformationExchangeEntry(APIModel):
     """
