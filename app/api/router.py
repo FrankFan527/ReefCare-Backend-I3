@@ -9,6 +9,7 @@ from app.api.routes import (
     evidence,
     health,
     hotspots,
+    planning,
     public,
     reference,
     reports,
@@ -16,6 +17,7 @@ from app.api.routes import (
 
 
 api_router = APIRouter()
+
 
 api_router.include_router(
     hotspots.router,
@@ -42,6 +44,17 @@ api_router.include_router(
     public.router,
     prefix="/public",
     tags=["Public Reef Information"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Epic 9 public Reef-Aware Dive Planning.
+# ---------------------------------------------------------------------------
+
+api_router.include_router(
+    planning.router,
+    prefix="/public/planning",
+    tags=["Reef-Aware Dive Planning"],
 )
 
 

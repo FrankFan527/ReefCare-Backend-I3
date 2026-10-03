@@ -57,7 +57,6 @@ class CaseStatus(str, Enum):
         "response_recommended"
     )
 
-
     RESPONSE_PLANNED = "response_planned"
     RESPONSE_COMPLETE = (
         "response_complete"
@@ -70,8 +69,8 @@ class CaseStatus(str, Enum):
     CLOSED_NO_PARTNER = "closed_no_partner"
     CLOSED_LOGGED = "closed_logged"
 
-
     CLOSED_RESOLVED = "closed_resolved"
+
 
 class ActionState(str, Enum):
     """
@@ -79,12 +78,6 @@ class ActionState(str, Enum):
 
     Values must match the case_action_state_valid CHECK in
     PostgreSQL.
-
-    Two distinct stored values rather than a nullable
-    completion flag. US7.1 AC4 requires that a planned
-    action is never rendered as a completed one, and a
-    boolean defaulting to false is easier to misread at the
-    display layer than a value that names itself.
     """
 
     ACTION_PLANNED = "action_planned"
@@ -145,3 +138,47 @@ class ClosureReason(str, Enum):
     MERGED_WITH_RELATED_INCIDENT = (
         "merged_related"
     )
+
+
+# ---------------------------------------------------------------------------
+# Epic 9 Reef-Aware Dive Planning.
+# ---------------------------------------------------------------------------
+
+
+class PlanningBand(str, Enum):
+    """
+    Deterministic public planning-condition assessment.
+
+    These values describe environmental conditions only.
+    They are not safety, permission or operational
+    clearance decisions.
+    """
+
+    MORE_FAVOURABLE = "more_favourable"
+    MIXED = "mixed"
+    LESS_FAVOURABLE = "less_favourable"
+
+    # Provider or required forecast values are unavailable.
+    UNAVAILABLE = "unavailable"
+
+    # Requested date is outside the supported live
+    # forecast window.
+    OUT_OF_HORIZON = "out_of_horizon"
+
+    # ReefCare does not have a usable planning position
+    # for this site.
+    NOT_ASSESSABLE = "not_assessable"
+
+
+class SeasonalState(str, Enum):
+    """
+    Reviewed seasonal-reference vocabulary for US9.1.
+    """
+
+    MONSOON = "monsoon"
+    TRANSITION = "transition"
+    TYPICAL = "typical"
+
+    # Explicitly means that no reviewed guidance currently
+    # exists. Historical averages must not be substituted.
+    UNREVIEWED = "unreviewed"
