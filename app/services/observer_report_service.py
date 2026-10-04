@@ -1,15 +1,29 @@
 # ---------------------------------------------------------------------------
-# Observer report tracking (US6.1 / US6.2).
+# Observer report tracking (US6.1 / US6.2 / US6.4).
 #
 # This service owns the Observer-facing projection and validation rules.
 #
 # The database remains the ownership boundary:
+#
 #   reefcare_my_reports(observer_id)
 #   reefcare_report_timeline(report_reference, observer_id)
 #   reefcare_report_location(report_reference, user_id)
 #
-# This layer deliberately does not expose coordinator identity, internal
-# decision vocabulary or private evidence storage references.
+# This layer deliberately does not expose:
+# - coordinator identity
+# - internal decision vocabulary
+# - private evidence storage references
+# - internal incident ids
+# - another Observer's report reference
+# - internal action notes
+#
+# Iteration 3 E6 extends the existing tracking layer with:
+#
+# - human-confirmed related-incident feedback
+# - publishable E7 follow-up/contribution outcomes
+#
+# No new workflow state is created here. Everything shown to the Observer is
+# projected from facts that already exist in E5/E7.
 # ---------------------------------------------------------------------------
 
 from datetime import date
@@ -36,6 +50,7 @@ from app.repositories.location_repository import (
 )
 from app.schemas.report import (
     ObserverClosureSummary,
+    ObserverContributionSummary,
     ObserverLocationResponse,
     ObserverReportDetailResponse,
     ObserverReportListResponse,
@@ -54,9 +69,10 @@ class ObserverReportValidationError(
     """
 
 
-# These statuses already communicate an Observer-safe outcome before terminal
-# closure. The text shown to the Observer comes from case_status.observer_label
-# rather than from raw case_decision.response_type.
+# ---------------------------------------------------------------------------
+# Existing Observer-safe outcome states.
+# ---------------------------------------------------------------------------
+
 OPEN_DECISION_STATUSES: set[str] = {
     CaseStatus.MONITORING.value,
     CaseStatus.REFERRED.value,
@@ -163,18 +179,330 @@ def get_observer_closure_summary(
         status=report[
             "status"
         ],
+
         closure_label=(
             closure_label
         ),
+
         public_note=report.get(
             "public_closure_note"
         ),
     )
 
 
+# ---------------------------------------------------------------------------
+# Iteration 3 — E6 contribution projection.
+# ---------------------------------------------------------------------------
+
+
+def build_action_contribution(
+    action,
+) -> ObserverContributionSummary | None:
+    """
+    Convert one explicitly publishable E7 case_action into
+    an Observer-safe contribution summary.
+
+    This function never infers that an action happened when
+    the stored action_state says only that it was planned.
+
+    Internal notes, coordinator identity, responsible team
+    and source_reference are deliberately excluded.
+    """
+
+    if action is None:
+        return None
+
+    action_state = action.get(
+        "action_state"
+    )
+
+    action_type_label = action.get(
+        "action_type_label"
+    )
+
+    follow_up_type = (
+        action.get(
+            "follow_up_type"
+        )
+        or ""
+    )
+
+    follow_up_normalised = (
+        str(
+            follow_up_type
+        )
+        .strip()
+        .lower()
+    )
+
+    recorded_outcome = action.get(
+        "recorded_outcome"
+    )
+
+    recorded_at = (
+        action.get(
+            "created_at"
+        )
+    )
+
+    next_follow_up_required = bool(
+        action.get(
+            "next_follow_up_required",
+            False,
+        )
+    )
+
+    next_follow_up_date = action.get(
+        "next_follow_up_date"
+    )
+
+    # ---------------------------------------------------------------
+    # Planned conservation action.
+    #
+    # This must never be described as completed.
+    # ---------------------------------------------------------------
+
+    if action_state == "action_planned":
+        return ObserverContributionSummary(
+            contribution_type="action",
+            state="planned",
+            label=(
+                "A conservation action has been "
+                "planned in response to this report."
+            ),
+            detail=(
+                action_type_label
+                or recorded_outcome
+            ),
+            recorded_at=recorded_at,
+            next_follow_up_required=(
+                next_follow_up_required
+            ),
+            next_follow_up_date=(
+                next_follow_up_date
+            ),
+        )
+
+    # ---------------------------------------------------------------
+    # Completed / recorded conservation action.
+    # ---------------------------------------------------------------
+
+    if action_state == "action_taken":
+        return ObserverContributionSummary(
+            contribution_type="action",
+            state="completed",
+            label=(
+                "A conservation action has been "
+                "recorded as completed."
+            ),
+            detail=(
+                recorded_outcome
+                or action_type_label
+            ),
+            recorded_at=recorded_at,
+            next_follow_up_required=(
+                next_follow_up_required
+            ),
+            next_follow_up_date=(
+                next_follow_up_date
+            ),
+        )
+
+    # ---------------------------------------------------------------
+    # Monitoring-oriented E7 follow-up.
+    #
+    # We do not claim monitoring is complete merely because
+    # a follow-up record exists.
+    # ---------------------------------------------------------------
+
+    if (
+        "monitor"
+        in follow_up_normalised
+    ):
+        return ObserverContributionSummary(
+            contribution_type="monitoring",
+            state="recorded",
+            label=(
+                "Your report contributed to reef "
+                "monitoring and follow-up."
+            ),
+            detail=recorded_outcome,
+            recorded_at=recorded_at,
+            next_follow_up_required=(
+                next_follow_up_required
+            ),
+            next_follow_up_date=(
+                next_follow_up_date
+            ),
+        )
+
+    # ---------------------------------------------------------------
+    # Generic publishable E7 follow-up.
+    #
+    # Still truthful: it says only that follow-up was
+    # recorded, not that a specific conservation outcome
+    # occurred.
+    # ---------------------------------------------------------------
+
+    return ObserverContributionSummary(
+        contribution_type="follow_up",
+        state="recorded",
+        label=(
+            "A follow-up outcome has been recorded "
+            "for this report."
+        ),
+        detail=recorded_outcome,
+        recorded_at=recorded_at,
+        next_follow_up_required=(
+            next_follow_up_required
+        ),
+        next_follow_up_date=(
+            next_follow_up_date
+        ),
+    )
+
+
+def build_status_contribution(
+    report,
+) -> ObserverContributionSummary | None:
+    """
+    Build a conservative contribution summary from the
+    report's already-recorded workflow state.
+
+    Used only when there is no explicitly publishable E7
+    action/follow-up row.
+
+    The wording deliberately avoids claiming more than the
+    stored state proves.
+    """
+
+    current_status = report.get(
+        "status"
+    )
+
+    if isinstance(
+        current_status,
+        CaseStatus,
+    ):
+        current_status = (
+            current_status.value
+        )
+
+    recorded_at = report.get(
+        "last_updated_at"
+    )
+
+    if (
+        current_status
+        == CaseStatus.REFERRED.value
+    ):
+        return ObserverContributionSummary(
+            contribution_type="referral",
+            state="referred",
+            label=(
+                "Your report was referred or shared "
+                "for follow-up."
+            ),
+            detail=None,
+            recorded_at=recorded_at,
+        )
+
+    if (
+        current_status
+        == CaseStatus.MONITORING.value
+    ):
+        return ObserverContributionSummary(
+            contribution_type="monitoring",
+            state="ongoing",
+            label=(
+                "Your report is contributing to "
+                "ongoing monitoring."
+            ),
+            detail=None,
+            recorded_at=recorded_at,
+        )
+
+    if (
+        current_status
+        == CaseStatus.RESPONSE_PLANNED.value
+    ):
+        return ObserverContributionSummary(
+            contribution_type="action",
+            state="planned",
+            label=(
+                "A conservation response has been "
+                "planned."
+            ),
+            detail=None,
+            recorded_at=recorded_at,
+        )
+
+    if (
+        current_status
+        == CaseStatus.RESPONSE_COMPLETE.value
+    ):
+        return ObserverContributionSummary(
+            contribution_type="action",
+            state="completed",
+            label=(
+                "A conservation response has been "
+                "recorded as completed."
+            ),
+            detail=None,
+            recorded_at=recorded_at,
+        )
+
+    if (
+        current_status
+        == CaseStatus.CLOSED_LOGGED.value
+    ):
+        return ObserverContributionSummary(
+            contribution_type="site_history",
+            state="recorded",
+            label=(
+                "Your report has been retained as "
+                "part of ReefCare's site history."
+            ),
+            detail=None,
+            recorded_at=recorded_at,
+        )
+
+    return None
+
+
+def get_observer_contribution_summary(
+    *,
+    report,
+    action=None,
+) -> ObserverContributionSummary | None:
+    """
+    Return the strongest truthful contribution projection.
+
+    An explicitly publishable E7 action is preferred.
+
+    If none exists, a small set of already-recorded case
+    statuses may still support a truthful contribution
+    message.
+    """
+
+    action_contribution = (
+        build_action_contribution(
+            action
+        )
+    )
+
+    if action_contribution is not None:
+        return action_contribution
+
+    return build_status_contribution(
+        report
+    )
+
+
 def build_observer_report_projection(
     report,
     location=None,
+    contribution=None,
 ) -> ObserverReportDetailResponse:
     """
     Build the complete Observer-facing report detail.
@@ -184,10 +512,9 @@ def build_observer_report_projection(
     coordinator/case-decision details are not part of this
     projection.
 
-    Iteration 2 extends the detail with:
-    - evidence count
-    - needsAttention
-    - lastUpdatedAt
+    Iteration 3 adds:
+    - truthful contribution/follow-up summary
+    - no invented conservation outcome
     """
 
     precise_location = None
@@ -228,6 +555,13 @@ def build_observer_report_projection(
                 ),
             )
         )
+
+    contribution_summary = (
+        get_observer_contribution_summary(
+            report=report,
+            action=contribution,
+        )
+    )
 
     return (
         ObserverReportDetailResponse(
@@ -302,6 +636,10 @@ def build_observer_report_projection(
                 )
             ),
 
+            contribution=(
+                contribution_summary
+            ),
+
             needs_attention=(
                 observer_needs_attention(
                     report[
@@ -343,21 +681,25 @@ def build_observer_timeline(
     current_status,
     current_status_label: str,
     rows,
+    related_incident=None,
+    contribution=None,
 ) -> ObserverTimelineResponse:
     """
     Build the Observer-facing timeline.
 
-    reefcare_report_timeline() already guarantees the
-    timeline contains only Observer-safe labels and
-    timestamps.
+    Existing PostgreSQL timeline rows contain only
+    Observer-safe labels and timestamps.
 
-    is_current is added to the final timeline row so the
-    frontend does not need to independently infer the
-    active point.
+    Iteration 3 additionally allows:
+    - a human-confirmed same-incident explanation
+    - one publishable follow-up/contribution event
 
-    currentStatus/currentStatusLabel remain explicit because
-    the latest database state is authoritative even if old
-    data contains an unusual or incomplete event history.
+    Neither extension exposes another report, another
+    Observer, Coordinator identity or internal incident id.
+
+    is_current remains attached only to the latest ordinary
+    status event. Impact/follow-up entries are informative
+    events rather than case states.
     """
 
     timeline: list[
@@ -373,6 +715,8 @@ def build_observer_timeline(
     ):
         timeline.append(
             ObserverTimelineEvent(
+                event_type="status",
+
                 status_label=(
                     row[
                         "status_label"
@@ -391,6 +735,77 @@ def build_observer_timeline(
                 ),
             )
         )
+
+    # ---------------------------------------------------------------
+    # Human-confirmed same incident.
+    #
+    # Do not expose:
+    # - related report reference
+    # - incident id
+    # - another Observer
+    # ---------------------------------------------------------------
+
+    if related_incident is not None:
+        timeline.append(
+            ObserverTimelineEvent(
+                event_type=(
+                    "related_incident"
+                ),
+
+                status_label=(
+                    "Linked to an existing report "
+                    "of the same issue"
+                ),
+
+                occurred_at=(
+                    related_incident[
+                        "occurred_at"
+                    ]
+                ),
+
+                is_current=False,
+            )
+        )
+
+    # ---------------------------------------------------------------
+    # Publishable E7 follow-up.
+    # ---------------------------------------------------------------
+
+    contribution_summary = (
+        build_action_contribution(
+            contribution
+        )
+    )
+
+    if (
+        contribution_summary is not None
+        and
+        contribution_summary.recorded_at
+        is not None
+    ):
+        timeline.append(
+            ObserverTimelineEvent(
+                event_type="follow_up",
+
+                status_label=(
+                    contribution_summary.label
+                ),
+
+                occurred_at=(
+                    contribution_summary
+                    .recorded_at
+                ),
+
+                is_current=False,
+            )
+        )
+
+    # Timeline entries may come from different append-only
+    # sources, so restore chronological ordering here.
+    timeline.sort(
+        key=lambda event:
+            event.occurred_at
+    )
 
     return ObserverTimelineResponse(
         report_reference=(
@@ -430,12 +845,6 @@ async def list_observer_reports(
 
     Ownership filtering occurs inside PostgreSQL before the
     rows reach this service.
-
-    Iteration 2 enriches each summary with:
-    - observedAt
-    - diveSite
-    - needsAttention
-    - lastUpdatedAt
     """
 
     if (
@@ -588,6 +997,9 @@ async def get_observer_report(
 
     Precise location remains independently authorised by
     reefcare_report_location().
+
+    Iteration 3 also loads only the latest explicitly
+    publishable E7 contribution/follow-up record.
     """
 
     try:
@@ -625,10 +1037,26 @@ async def get_observer_report(
             )
         )
 
+        contribution = (
+            await report_repository
+            .get_observer_contribution(
+                db=db,
+
+                observer_id=(
+                    observer_id
+                ),
+
+                report_reference=(
+                    report_reference
+                ),
+            )
+        )
+
         return (
             build_observer_report_projection(
                 report=report,
                 location=location,
+                contribution=contribution,
             )
         )
 
@@ -650,19 +1078,23 @@ async def get_observer_report_timeline(
     report_reference: str,
 ) -> ObserverTimelineResponse:
     """
-    Return Observer-safe plain-language status history.
+    Return Observer-safe plain-language history.
 
     The report lookup occurs first.
 
-    This means:
+    Therefore:
     - missing report -> 404
     - another Observer's report -> 404
 
-    The caller therefore cannot enumerate valid report
-    references belonging to other users.
+    The caller cannot enumerate valid report references
+    belonging to other users.
 
-    reefcare_report_timeline() then supplies only safe
-    status labels and timestamps.
+    Iteration 3 adds two optional impact events:
+    - confirmed related incident
+    - publishable E7 follow-up
+
+    Neither event exposes another Observer or internal case
+    information.
     """
 
     try:
@@ -701,6 +1133,36 @@ async def get_observer_report_timeline(
             )
         )
 
+        related_incident = (
+            await report_repository
+            .get_observer_related_incident_event(
+                db=db,
+
+                observer_id=(
+                    observer_id
+                ),
+
+                report_reference=(
+                    report_reference
+                ),
+            )
+        )
+
+        contribution = (
+            await report_repository
+            .get_observer_contribution(
+                db=db,
+
+                observer_id=(
+                    observer_id
+                ),
+
+                report_reference=(
+                    report_reference
+                ),
+            )
+        )
+
         return build_observer_timeline(
             report_reference=(
                 report_reference
@@ -719,6 +1181,14 @@ async def get_observer_report_timeline(
             ),
 
             rows=rows,
+
+            related_incident=(
+                related_incident
+            ),
+
+            contribution=(
+                contribution
+            ),
         )
 
     except NotFoundError:
