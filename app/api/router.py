@@ -12,6 +12,7 @@ from app.api.routes import (
     planning,
     public,
     reference,
+    related_incidents,
     reports,
 )
 
@@ -62,6 +63,13 @@ api_router.include_router(
     coordinator.router,
     prefix="/coordinator",
     tags=["Coordinator"],
+)
+
+
+api_router.include_router(
+    related_incidents.router,
+    prefix="/coordinator",
+    tags=["Related Incidents"],
 )
 
 
