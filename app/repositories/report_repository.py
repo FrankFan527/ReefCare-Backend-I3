@@ -856,3 +856,200 @@ async def get_reviewed_ai_suggestions(
     )
 
     return result.mappings().all()
+
+# ---------------------------------------------------------------------------
+# Iteration 3 — E6 Observer Impact Feedback.
+#
+# These queries are deliberately read-only.
+#
+# They expose only information that may be projected back
+# to the Observer. They never return:
+#
+# - another Observer's identity
+# - coordinator identity
+# - another report reference
+# - internal incident ids
+# - private evidence
+# - internal relationship notes
+#
+# Ownership is enforced in SQL with report.observer_id.
+# ---------------------------------------------------------------------------
+
+
+async def get_observer_related_incident_event(
+    db: AsyncSession,
+    observer_id: int,
+    report_reference: str,
+) -> dict | None:
+    """
+    Return the latest human-confirmed same-incident event
+    involving one Observer-owned report.
+
+    The related report itself is deliberately not returned.
+
+    US6.2 only needs to tell the Observer that their report
+    was linked to an existing report of the same issue.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                d.decided_at
+                    AS occurred_at
+
+            FROM report AS r
+
+            JOIN report_relationship_decision AS d
+                ON (
+                    d.report_id = r.report_id
+                    OR
+                    d.related_report_id = r.report_id
+                )
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.observer_id =
+                    :observer_id
+
+                AND r.deleted_at
+                    IS NULL
+
+                AND d.decision =
+                    'same_incident'
+
+            ORDER BY
+                d.decided_at DESC,
+                d.report_relationship_decision_id DESC
+
+            LIMIT 1
+            """
+        ),
+        {
+            "observer_id":
+                observer_id,
+
+            "report_reference":
+                report_reference,
+        },
+    )
+
+    row = (
+        result
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        return None
+
+    return dict(row)
+
+
+async def get_observer_contribution(
+    db: AsyncSession,
+    observer_id: int,
+    report_reference: str,
+) -> dict | None:
+    """
+    Return the latest publishable E7 action/follow-up state
+    for one Observer-owned report.
+
+    The projection deliberately excludes:
+    - created_by
+    - responsible_team
+    - internal notes
+    - source_reference
+    - evidence references
+
+    A planned action therefore remains planned, and an
+    action_taken record may be described as completed.
+
+    Only explicitly publishable records may reach E6.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                ca.case_action_id,
+
+                at.code
+                    AS action_type_code,
+
+                at.label
+                    AS action_type_label,
+
+                ca.action_state,
+
+                ca.action_date,
+
+                ca.follow_up_type,
+
+                ca.recording_level,
+
+                ca.recorded_outcome,
+
+                ca.next_follow_up_required,
+
+                ca.next_follow_up_date,
+
+                ca.created_at
+
+            FROM case_action AS ca
+
+            JOIN report AS r
+                ON r.report_id =
+                   ca.report_id
+
+            JOIN action_type AS at
+                ON at.action_type_id =
+                   ca.action_type_id
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.observer_id =
+                    :observer_id
+
+                AND r.deleted_at
+                    IS NULL
+
+                AND ca.is_publishable
+                    IS TRUE
+
+                AND COALESCE(
+                    ca.is_demonstration,
+                    FALSE
+                ) IS FALSE
+
+            ORDER BY
+                ca.created_at DESC,
+                ca.case_action_id DESC
+
+            LIMIT 1
+            """
+        ),
+        {
+            "observer_id":
+                observer_id,
+
+            "report_reference":
+                report_reference,
+        },
+    )
+
+    row = (
+        result
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        return None
+
+    return dict(row)
+
