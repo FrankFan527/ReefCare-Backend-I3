@@ -10,6 +10,7 @@ from app.api.routes import (
     health,
     hotspots,
     planning,
+    plans,
     public,
     reference,
     related_incidents,
@@ -56,6 +57,17 @@ api_router.include_router(
     planning.router,
     prefix="/public/planning",
     tags=["Reef-Aware Dive Planning"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Epic 9 authenticated Observer Saved Plans.
+# ---------------------------------------------------------------------------
+
+api_router.include_router(
+    plans.router,
+    prefix="/plans",
+    tags=["Saved Dive Plans"],
 )
 
 
