@@ -7,6 +7,7 @@ from app.api.routes import (
     coordinator,
     dive_sessions,
     evidence,
+    follow_ups,
     health,
     hotspots,
     planning,
@@ -82,6 +83,13 @@ api_router.include_router(
     related_incidents.router,
     prefix="/coordinator",
     tags=["Related Incidents"],
+)
+
+
+api_router.include_router(
+    follow_ups.router,
+    prefix="/coordinator",
+    tags=["Conservation Follow-up"],
 )
 
 
