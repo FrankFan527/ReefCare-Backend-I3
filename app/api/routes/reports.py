@@ -59,6 +59,9 @@ from app.schemas.smart_report import (
     SmartReportStructureRequest,
     SmartReportStructureResponse,
 )
+from app.schemas.visual_recognition import (
+    VisualRecognitionResponse,
+)
 from app.services.completeness_service import (
     evaluate_report_completeness,
 )
@@ -66,6 +69,7 @@ from app.services.evidence_service import (
     EvidenceStorageError,
     EvidenceTooLargeError,
     EvidenceValidationError,
+    validate_photo,
 )
 from app.services.information_service import (
     get_open_request_for_observer,
@@ -90,6 +94,9 @@ from app.services.report_service import (
 )
 from app.services.smart_report_service import (
     structure_report_description,
+)
+from app.services.visual_recognition_service import (
+    recognize_visual_threat,
 )
 
 
@@ -126,6 +133,51 @@ async def smart_structure_report(
 
     return await structure_report_description(
         the_report_input.description
+    )
+
+
+@router.post(
+    "/visual-recognition",
+    response_model=VisualRecognitionResponse,
+)
+async def recognize_report_photo(
+    current_observer: CurrentObserver,
+    photo: UploadFile = File(...),
+):
+    """
+    Return an advisory threat suggestion for one validated
+    pre-submission photo.
+
+    The photo and AI result are not persisted. AI failure
+    is non-blocking, and the Observer's confirmed category
+    remains the canonical report value.
+    """
+
+    await smart_report_limiter.check(
+        key=(
+            "visual-recognition:"
+            + str(current_observer["user_id"])
+        )
+    )
+
+    try:
+        content = await validate_photo(photo)
+    except EvidenceTooLargeError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            ),
+            detail=str(exc),
+        ) from exc
+    except EvidenceValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return await recognize_visual_threat(
+        content=content,
+        content_type=(photo.content_type or "").lower(),
     )
 
 
