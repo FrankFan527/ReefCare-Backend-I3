@@ -1,10 +1,12 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import LocationSource
 from app.repositories import (
     reference_repository,
     report_repository,
 )
 from app.schemas.report import (
+    AISuggestionState,
     ReportReviewRequest,
 )
 from app.services.completeness_service import (
@@ -14,6 +16,135 @@ from app.services.location_service import (
     evaluate_site_distance_warning,
     get_submitted_precise_point,
 )
+
+
+def _normalise_ai_value(
+    value: str | None,
+) -> str | None:
+    """
+    Normalise an AI suggestion only for comparison.
+
+    The original value is still returned to the client and
+    persisted unchanged.
+
+    Case and surrounding whitespace must not create a false
+    conflict.
+    """
+
+    if value is None:
+        return None
+
+    normalised = value.strip().lower()
+
+    if normalised == "":
+        return None
+
+    return normalised
+
+
+def _build_ai_conflicts(
+    suggestions: list[AISuggestionState],
+) -> list[dict]:
+    """
+    Find disagreements between Smart Report Structuring and
+    Visual Threat Recognition for the same field.
+
+    The function is deliberately advisory:
+
+    - it does not select a winning value
+    - it does not modify suggestion status
+    - it does not modify the Observer's report
+    - it does not decide whether submission is allowed
+
+    Submission readiness continues to depend on whether all
+    suggestions have been explicitly resolved.
+
+    A conflict is emitted only when both AI sources provide
+    a non-empty value for the same field and those values
+    differ after simple comparison normalisation.
+    """
+
+    by_field: dict[
+        str,
+        dict[
+            str,
+            AISuggestionState,
+        ],
+    ] = {}
+
+    for suggestion in suggestions:
+        field_suggestions = by_field.setdefault(
+            suggestion.field,
+            {},
+        )
+
+        field_suggestions[
+            suggestion.source
+        ] = suggestion
+
+    conflicts: list[dict] = []
+
+    for (
+        field,
+        field_suggestions,
+    ) in by_field.items():
+        text_suggestion = (
+            field_suggestions.get(
+                "smart_report"
+            )
+        )
+
+        visual_suggestion = (
+            field_suggestions.get(
+                "visual_recognition"
+            )
+        )
+
+        if (
+            text_suggestion is None
+            or visual_suggestion is None
+        ):
+            continue
+
+        text_value = _normalise_ai_value(
+            text_suggestion.suggested_value
+        )
+
+        visual_value = _normalise_ai_value(
+            visual_suggestion.suggested_value
+        )
+
+        # An unavailable/unsure source does not create a
+        # value-to-value conflict.
+        if (
+            text_value is None
+            or visual_value is None
+        ):
+            continue
+
+        if text_value == visual_value:
+            continue
+
+        conflicts.append(
+            {
+                "field":
+                    field,
+
+                "text_suggestion":
+                    text_suggestion
+                    .suggested_value,
+
+                "visual_suggestion":
+                    visual_suggestion
+                    .suggested_value,
+
+                "visual_confidence":
+                    visual_suggestion
+                    .confidence,
+            }
+        )
+
+    return conflicts
 
 
 async def review_report(
@@ -31,9 +162,15 @@ async def review_report(
     - does not mutate workflow state
     - does not call AI
 
-    It aggregates deterministic completeness, location
-    warning and the Observer-confirmation state of any AI
-    suggestions.
+    It aggregates:
+    - deterministic completeness
+    - selected-site/location warning
+    - evidence metadata
+    - AI suggestion resolution state
+    - I3 text-AI versus visual-AI conflicts
+
+    AI suggestions remain advisory. The Observer-confirmed
+    report values remain canonical.
     """
 
     completeness = (
@@ -44,9 +181,16 @@ async def review_report(
         )
     )
 
+    # -----------------------------------------------------------------------
+    # Canonical selected threat.
+    # -----------------------------------------------------------------------
+
     threat = None
 
-    if report_data.threat_category_id is not None:
+    if (
+        report_data.threat_category_id
+        is not None
+    ):
         threat_row = (
             await reference_repository
             .get_selectable_threat_category(
@@ -72,10 +216,16 @@ async def review_report(
                     threat_row["label"],
             }
 
-    dive_session = None
-    dive_site = None
+    # -----------------------------------------------------------------------
+    # Dive-session context.
+    # -----------------------------------------------------------------------
 
-    if report_data.dive_session_id is not None:
+    dive_session = None
+
+    if (
+        report_data.dive_session_id
+        is not None
+    ):
         session_row = (
             await report_repository
             .get_owned_dive_session(
@@ -96,13 +246,20 @@ async def review_report(
                     ]
             }
 
+    # -----------------------------------------------------------------------
+    # Selected dive site and advisory distance warning.
+    # -----------------------------------------------------------------------
+
+    dive_site = None
     location_warning = None
 
     location = report_data.location
 
     if (
         location is not None
-        and location.named_dive_site_id is not None
+        and
+        location.named_dive_site_id
+        is not None
     ):
         site_reference = (
             await reference_repository
@@ -137,24 +294,28 @@ async def review_report(
                 location.location_source
             )
 
+            # Preserve I1 compatibility where locationSource
+            # was omitted.
             if source is None:
-                if location.map_pin is not None:
-                    from app.core.enums import LocationSource
-
+                if (
+                    location.map_pin
+                    is not None
+                ):
                     source = (
                         LocationSource
                         .MANUAL_MAP_PIN
                     )
-                else:
-                    from app.core.enums import LocationSource
 
+                else:
                     source = (
                         LocationSource
                         .NAMED_DIVE_SITE
                     )
 
             map_pin = location.map_pin
-            coordinates = location.coordinates
+            coordinates = (
+                location.coordinates
+            )
 
             (
                 submitted_latitude,
@@ -201,28 +362,60 @@ async def review_report(
                 )
             )
 
+    # -----------------------------------------------------------------------
+    # I3 AI final-review state.
+    # -----------------------------------------------------------------------
+
     unresolved_suggestions = [
         suggestion
         for suggestion
         in report_data.ai_suggestions
-        if suggestion.status == "unresolved"
+        if (
+            suggestion.status
+            == "unresolved"
+        )
     ]
+
+    ai_conflicts = _build_ai_conflicts(
+        report_data.ai_suggestions
+    )
+
+    ai_review = {
+        "has_conflict":
+            bool(ai_conflicts),
+
+        "conflicts":
+            ai_conflicts,
+    }
+
+    # -----------------------------------------------------------------------
+    # Evidence review projection.
+    # -----------------------------------------------------------------------
 
     evidence = [
         {
-            "index": index,
+            "index":
+                index,
+
             "capturedAt":
                 metadata.captured_at,
         }
         for index, metadata
         in enumerate(
-            report_data.evidence_metadata
+            report_data
+            .evidence_metadata
         )
     ]
 
+    # -----------------------------------------------------------------------
+    # Final non-persistent projection.
+    # -----------------------------------------------------------------------
+
     return {
         "is_submittable": (
-            completeness["is_submittable"]
+            completeness[
+                "is_submittable"
+            ]
             and not unresolved_suggestions
         ),
 
@@ -231,6 +424,9 @@ async def review_report(
 
         "unresolved_suggestions":
             unresolved_suggestions,
+
+        "ai_review":
+            ai_review,
 
         "report": {
             "threat":
