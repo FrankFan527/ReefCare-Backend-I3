@@ -11,16 +11,53 @@ from app.core.exceptions import (
     NotFoundError,
 )
 from app.schemas.public import (
+    PublicDiveSiteResponse,
     PublicReportHandoffResponse,
     PublicSiteActivityResponse,
 )
 from app.services.public_service import (
     build_report_handoff,
     get_public_activity,
+    get_public_site_detail,
 )
 
 
 router = APIRouter()
+
+
+@router.get(
+    "/dive-sites/{dive_site_id}",
+    response_model=PublicDiveSiteResponse,
+)
+async def get_public_dive_site(
+    dive_site_id: int,
+    db: DatabaseSession,
+):
+    """
+    E2 public dive-site information.
+
+    No authentication is required.
+
+    planningAreaCode is the canonical E2 -> E9 planning
+    handoff. A null value means this site is not currently
+    configured for ReefCare planning.
+    """
+
+    try:
+        result = await get_public_site_detail(
+            db=db,
+            dive_site_id=dive_site_id,
+        )
+
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    return PublicDiveSiteResponse(
+        **result
+    )
 
 
 @router.get(

@@ -7,6 +7,67 @@ from app.repositories.public_repository import (
 )
 
 
+async def get_public_site_detail(
+    *,
+    db: AsyncSession,
+    dive_site_id: int,
+) -> dict:
+    """
+    Build the public E2 site projection.
+
+    planning_area_code is stored on the canonical
+    dive_site row and therefore becomes the only supported
+    E2 -> E9 mapping.
+
+    No planning area is inferred from a display label.
+    """
+
+    site = await get_public_site(
+        db=db,
+        dive_site_id=dive_site_id,
+    )
+
+    if site is None:
+        raise NotFoundError(
+            "Dive site not found"
+        )
+
+    planning_area_code = site[
+        "planning_area_code"
+    ]
+
+    return {
+        "dive_site_id":
+            site["dive_site_id"],
+
+        "name":
+            site["name"],
+
+        "public_area_label":
+            site["public_area_label"],
+
+        "region":
+            site["region"],
+
+        "centre_latitude":
+            site["centre_latitude"],
+
+        "centre_longitude":
+            site["centre_longitude"],
+
+        "default_uncertainty_metres":
+            site[
+                "default_uncertainty_metres"
+            ],
+
+        "planning_available":
+            planning_area_code is not None,
+
+        "planning_area_code":
+            planning_area_code,
+    }
+
+
 async def get_public_activity(
     *,
     db: AsyncSession,
@@ -100,12 +161,9 @@ async def build_report_handoff(
     Validate a public selected site and return the canonical
     handoff context for E2 -> authentication -> E4.
 
-    No draft or private report is created here.
+    This remains separate from E2 -> E9 planning.
 
-    The reporting path must match the frontend's actual
-    report-entry route. F11 previously returned
-    /reports/new, which does not exist in the current
-    frontend application.
+    No draft or private report is created here.
     """
 
     site = await get_public_site(
@@ -128,27 +186,20 @@ async def build_report_handoff(
         "public_area_label":
             site["public_area_label"],
 
-        # Published site centre, returned so the public map plots the real
-        # position rather than a hardcoded one. Nullable: a site added later
-        # may not have been sourced, and an absent coordinate is a truthful
-        # answer rather than a gap to fill.
         "centre_latitude":
             site["centre_latitude"],
 
         "centre_longitude":
             site["centre_longitude"],
 
-        # Returned with the coordinate, never without it. This is the radius a
-        # dive-site-only report actually covers.
         "default_uncertainty_metres":
-            site["default_uncertainty_metres"],
+            site[
+                "default_uncertainty_metres"
+            ],
 
         "requires_authentication":
             True,
 
-        # F11. The frontend route is /report-a-reef; /reports/new was never a
-        # real path, so the handoff was sending visitors nowhere. Confirmed
-        # with the frontend owner on 17 September 2026.
         "reporting_path":
             "/report-a-reef",
     }
