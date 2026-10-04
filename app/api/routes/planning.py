@@ -9,9 +9,7 @@
 # US9.1 Seasonal Calendar
 # US9.2 Travel-Date Comparison
 # US9.3 Dive-Site Comparison
-#
-# US9.4 AI Planning Brief is added after this deterministic
-# factual layer is stable.
+# US9.4 AI Planning Brief
 # ---------------------------------------------------------------------------
 
 from datetime import date
@@ -26,8 +24,13 @@ from app.api.dependencies.db import (
 )
 from app.schemas.planning import (
     DateComparisonResponse,
+    PlanningBriefRequest,
+    PlanningBriefResponse,
     SeasonalCalendarResponse,
     SiteComparisonResponse,
+)
+from app.services.planning_brief_service import (
+    generate_planning_brief,
 )
 from app.services.planning_service import (
     compare_sites_for_date,
@@ -125,5 +128,39 @@ async def get_site_comparison(
 
         requested_date=(
             date_value
+        ),
+    )
+
+
+@router.post(
+    "/brief",
+    response_model=(
+        PlanningBriefResponse
+    ),
+)
+async def create_planning_brief(
+    brief_input: PlanningBriefRequest,
+    db: DatabaseSession,
+):
+    """
+    US9.4 generate an optional AI-written planning brief.
+
+    The client supplies only site/date intent. Forecast and
+    public reef context are resolved by the backend.
+
+    AI failure is non-blocking and returns
+    status="unavailable".
+    """
+
+    return await generate_planning_brief(
+        db=db,
+
+        site_id=(
+            brief_input.site_id
+        ),
+
+        planned_date=(
+            brief_input
+            .planned_date
         ),
     )
