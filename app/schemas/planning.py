@@ -11,6 +11,7 @@ from datetime import (
     date,
     datetime,
 )
+from typing import Literal
 
 from pydantic import (
     Field,
@@ -145,3 +146,41 @@ class SiteComparisonResponse(APIModel):
     sites: list[
         SiteComparisonItem
     ]
+
+
+# ---------------------------------------------------------------------------
+# US9.4 AI Planning Brief.
+#
+# The client supplies intent only:
+#
+#     siteId
+#     plannedDate
+#
+# It must never supply forecast values or reef facts for
+# the AI prompt. The backend resolves those independently.
+# ---------------------------------------------------------------------------
+
+
+class PlanningBriefRequest(APIModel):
+    site_id: int = Field(
+        gt=0,
+    )
+
+    planned_date: date
+
+
+class PlanningBriefResponse(APIModel):
+    site_id: int
+
+    planned_date: date
+
+    status: Literal[
+        "generated",
+        "unavailable",
+    ]
+
+    text: str | None = None
+
+    generated_at: (
+        datetime | None
+    ) = None
