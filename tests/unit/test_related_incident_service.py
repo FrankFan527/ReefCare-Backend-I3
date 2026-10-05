@@ -6,6 +6,7 @@
 # validation, SQLSTATE mapping, and the engine wrapper never raising.
 # ---------------------------------------------------------------------------
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -352,3 +353,164 @@ async def test_analysis_read_timeout_stays_unavailable_even_if_rollback_fails(mo
     response = await the_service.get_related_reports(db, "RC-0001", 42)
     assert response.analysis_state == RelatedAnalysisState.UNAVAILABLE
     assert response.candidates == []
+
+
+def mock_decision_dependencies(monkeypatch, first_incident, second_incident):
+    monkeypatch.setattr(the_service, "load_owned_case", AsyncMock(return_value={}))
+    identities = [
+        {"report_id": 1, "report_reference": "RC-0001", "claimed_by_user_id": 42, "incident_id": first_incident},
+        {"report_id": 2, "report_reference": "RC-0002", "claimed_by_user_id": 42, "incident_id": second_incident},
+    ]
+    monkeypatch.setattr(the_service.the_repository, "get_report_identity", AsyncMock(side_effect=[
+        *identities,
+    ]))
+    monkeypatch.setattr(the_service.the_repository, "lock_relationship_reports", AsyncMock(
+        return_value={row["report_reference"]: row for row in identities}))
+    suggestion = AsyncMock(return_value={"rule_version": "rid-v2-image"})
+    monkeypatch.setattr(the_service, "_find_suggestion_either_direction", suggestion)
+    saved = {"out_incident_reference": f"INC-{first_incident or second_incident or 30}",
+             "out_decided_at": THE_NOW}
+    confirm = AsyncMock(return_value=saved)
+    reject = AsyncMock(return_value={"out_decided_at": THE_NOW})
+    monkeypatch.setattr(the_service.the_repository, "confirm_same_incident", confirm)
+    monkeypatch.setattr(the_service.the_repository, "record_not_related", reject)
+    return suggestion, confirm, reject
+
+
+@pytest.mark.parametrize("first_incident,second_incident", [
+    (None, None), (10, None), (None, 10), (10, 10), (10, 20), (20, 10),
+])
+@pytest.mark.asyncio
+async def test_confirmation_incident_membership_policy(monkeypatch, first_incident, second_incident):
+    suggestion, confirm, reject = mock_decision_dependencies(monkeypatch, first_incident, second_incident)
+    db = AsyncMock()
+    request = RelationshipDecisionCreate(decision="same_incident", note="  Verified reef observation.  ")
+    if first_incident is not None and second_incident is not None and first_incident != second_incident:
+        with pytest.raises(WorkflowError, match="Combining incident groups is outside this workflow"):
+            await the_service.record_relationship_decision(db, "RC-0001", "RC-0002", 42, request)
+        confirm.assert_not_awaited()
+        suggestion.assert_not_awaited()
+        db.commit.assert_not_awaited()
+        db.rollback.assert_awaited_once()
+    else:
+        response = await the_service.record_relationship_decision(db, "RC-0001", "RC-0002", 42, request)
+        assert response.incident_reference == f"INC-{first_incident or second_incident or 30}"
+        assert response.decided_by == 42
+        confirm.assert_awaited_once()
+        assert confirm.await_args.kwargs["note"] == "Verified reef observation."
+        assert confirm.await_args.kwargs["suggested_rule_version"] == "rid-v2-image"
+        db.commit.assert_awaited_once()
+    reject.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_existing_function_conflict_is_rolled_back(monkeypatch):
+    _, confirm, _ = mock_decision_dependencies(monkeypatch, None, None)
+    confirm.side_effect = make_dbapi_error("RC409", the_service.INCIDENT_GROUP_MERGE_BLOCKED_MESSAGE)
+    db = AsyncMock()
+    with pytest.raises(WorkflowError, match="different incidents"):
+        await the_service.record_relationship_decision(
+            db, "RC-0001", "RC-0002", 42, RelationshipDecisionCreate(decision="same_incident"))
+    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_different_incidents_can_still_be_marked_not_related(monkeypatch):
+    _, confirm, reject = mock_decision_dependencies(monkeypatch, 10, 20)
+    db = AsyncMock()
+    response = await the_service.record_relationship_decision(
+        db, "RC-0001", "RC-0002", 42,
+        RelationshipDecisionCreate(decision="not_related", rejection_reason_code="different_object"))
+    assert response.decision == "not_related"
+    assert response.incident_reference is None
+    confirm.assert_not_awaited()
+    reject.assert_awaited_once()
+    db.commit.assert_awaited_once()
+    the_service.the_repository.lock_relationship_reports.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmation_uses_membership_after_waiting_for_lock(monkeypatch):
+    suggestion, confirm, _ = mock_decision_dependencies(monkeypatch, None, None)
+    order = []
+
+    async def checked_owner(**kwargs):
+        order.append("ownership")
+        return {"incident_id": None}
+
+    async def locked_reports(**kwargs):
+        # A different confirmation completed before we acquired the lock.
+        order.append("locked_memberships")
+        return {
+            "RC-0001": {"report_id": 1, "claimed_by_user_id": 42, "incident_id": 10},
+            "RC-0002": {"report_id": 2, "claimed_by_user_id": 42, "incident_id": 20},
+        }
+
+    monkeypatch.setattr(the_service, "load_owned_case", checked_owner)
+    monkeypatch.setattr(the_service.the_repository, "lock_relationship_reports", locked_reports)
+    db = AsyncMock()
+    with pytest.raises(WorkflowError):
+        await the_service.record_relationship_decision(
+            db, "RC-0001", "RC-0002", 42, RelationshipDecisionCreate(decision="same_incident"))
+    assert order == ["ownership", "ownership", "locked_memberships"]
+    the_service.the_repository.get_report_identity.assert_not_awaited()
+    confirm.assert_not_awaited()
+    suggestion.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.parametrize("owner", [None, 99])
+@pytest.mark.asyncio
+async def test_ownership_change_while_waiting_does_not_disclose_incidents(monkeypatch, owner):
+    suggestion, confirm, _ = mock_decision_dependencies(monkeypatch, 10, 20)
+    the_service.the_repository.lock_relationship_reports.return_value["RC-0002"]["claimed_by_user_id"] = owner
+    db = AsyncMock()
+    with pytest.raises(AuthorizationError, match="Both reports must be owned by you"):
+        await the_service.record_relationship_decision(
+            db, "RC-0001", "RC-0002", 42, RelationshipDecisionCreate(decision="same_incident"))
+    confirm.assert_not_awaited()
+    suggestion.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_report_removed_while_waiting_releases_locks(monkeypatch):
+    _, confirm, _ = mock_decision_dependencies(monkeypatch, None, None)
+    del the_service.the_repository.lock_relationship_reports.return_value["RC-0002"]
+    db = AsyncMock()
+    with pytest.raises(NotFoundError):
+        await the_service.record_relationship_decision(
+            db, "RC-0001", "RC-0002", 42, RelationshipDecisionCreate(decision="same_incident"))
+    confirm.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.parametrize("failure", [
+    make_dbapi_error("42501", "private permission detail"), asyncio.CancelledError(),
+])
+@pytest.mark.asyncio
+async def test_lock_failure_or_cancellation_rolls_back(monkeypatch, failure):
+    _, confirm, _ = mock_decision_dependencies(monkeypatch, None, None)
+    the_service.the_repository.lock_relationship_reports.side_effect = failure
+    db = AsyncMock()
+    expected = asyncio.CancelledError if isinstance(failure, asyncio.CancelledError) else DatabaseOperationError
+    with pytest.raises(expected):
+        await the_service.record_relationship_decision(
+            db, "RC-0001", "RC-0002", 42, RelationshipDecisionCreate(decision="same_incident"))
+    confirm.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unauthorised_confirmation_never_acquires_locks(monkeypatch):
+    _, confirm, _ = mock_decision_dependencies(monkeypatch, None, None)
+    monkeypatch.setattr(the_service, "load_owned_case", AsyncMock(side_effect=AuthorizationError()))
+    db = AsyncMock()
+    with pytest.raises(AuthorizationError):
+        await the_service.record_relationship_decision(
+            db, "RC-0001", "RC-0002", 42, RelationshipDecisionCreate(decision="same_incident"))
+    the_service.the_repository.lock_relationship_reports.assert_not_awaited()
+    confirm.assert_not_awaited()
+    db.rollback.assert_awaited_once()
