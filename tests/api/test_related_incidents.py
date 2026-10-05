@@ -9,6 +9,8 @@ from app.api.dependencies.auth import require_authentication
 from app.api.dependencies.authorization import require_coordinator, require_observer
 from app.api.routes import reports
 from app.core.exceptions import AuthorizationError, ConflictError
+from sqlalchemy.exc import DBAPIError
+from types import SimpleNamespace
 from app.db.session import get_db_session
 from app.main import app
 from app.schemas.related_incident import RelatedReportsResponse, RelatedAnalysisState, RelationshipDecisionResponse, ImageAnalysisState
@@ -116,6 +118,44 @@ def test_not_related_requires_reason_before_service_is_called(client, monkeypatc
     monkeypatch.setattr(service, "record_relationship_decision", mock)
     assert client.post(BASE + "/RC-0002/decision", json={"decision": "not_related"}).status_code == 422
     mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize("incidents", [(10, 20), (20, 10)])
+def test_distinct_incidents_return_409_without_calling_existing_merge_function(client, monkeypatch, incidents):
+    authorise_coordinator()
+    monkeypatch.setattr(service, "load_owned_case", AsyncMock(return_value={}))
+    monkeypatch.setattr(service.the_repository, "lock_relationship_reports", AsyncMock(return_value={
+        "RC-0001": {"report_id": 1, "claimed_by_user_id": 42, "incident_id": incidents[0]},
+        "RC-0002": {"report_id": 2, "claimed_by_user_id": 42, "incident_id": incidents[1]},
+    }))
+    monkeypatch.setattr(service, "_find_suggestion_either_direction", AsyncMock(return_value=None))
+    orig = SimpleNamespace(sqlstate="RC409", diag=SimpleNamespace(
+        message_primary=service.INCIDENT_GROUP_MERGE_BLOCKED_MESSAGE))
+    confirm = AsyncMock(side_effect=DBAPIError("statement", {}, orig))
+    monkeypatch.setattr(service.the_repository, "confirm_same_incident", confirm)
+    response = client.post(BASE + "/RC-0002/decision", json={"decision": "same_incident"})
+    assert response.status_code == 409
+    assert response.json()["code"] == "workflow_error"
+    assert response.json()["detail"] == service.INCIDENT_GROUP_MERGE_BLOCKED_MESSAGE
+    assert "incidentReference" not in response.json()
+    confirm.assert_not_awaited()
+
+
+@pytest.mark.parametrize("incidents", [(None, None), (10, None), (None, 10), (10, 10)])
+def test_allowed_memberships_keep_201_api_contract(client, monkeypatch, incidents):
+    authorise_coordinator()
+    monkeypatch.setattr(service, "load_owned_case", AsyncMock(return_value={}))
+    monkeypatch.setattr(service.the_repository, "lock_relationship_reports", AsyncMock(return_value={
+        "RC-0001": {"report_id": 1, "claimed_by_user_id": 42, "incident_id": incidents[0]},
+        "RC-0002": {"report_id": 2, "claimed_by_user_id": 42, "incident_id": incidents[1]},
+    }))
+    monkeypatch.setattr(service, "_find_suggestion_either_direction", AsyncMock(return_value=None))
+    confirm = AsyncMock(return_value={"out_incident_reference": "INC-10", "out_decided_at": NOW})
+    monkeypatch.setattr(service.the_repository, "confirm_same_incident", confirm)
+    response = client.post(BASE + "/RC-0002/decision", json={"decision": "same_incident"})
+    assert response.status_code == 201
+    assert response.json()["incidentReference"] == "INC-10"
+    confirm.assert_awaited_once()
 
 
 PAYLOAD = {

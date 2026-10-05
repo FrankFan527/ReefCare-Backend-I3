@@ -1,26 +1,29 @@
 # ---------------------------------------------------------------------------
 # US5.9 Related Incidents — integration test against a real database.
 #
-# Run only on a dev branch where i3_e5_related_incidents.sql is applied,
+# Run only on a disposable staging branch with the existing US5.9 schema,
+# including image columns. No no-group-merge SQL upgrade is required.
 # with DATABASE_URL set to the RESTRICTED login role (reefcare_api), not
 # neondb_owner, so grants are tested the way production uses them:
 #
-#   pytest -m integration tests/integration/test_related_incident_db.py
+#   REEFCARE_INTEGRATION_TARGET=staging pytest -m integration tests/integration/test_related_incident_db.py
 #
 # Everything happens inside one outer transaction that is rolled back at the
 # end. Service-level commits become savepoints, so not even the append-only
 # decision rows survive the test.
 # ---------------------------------------------------------------------------
 
+import os
+
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
-from app.core.exceptions import AuthorizationError
+from app.core.exceptions import AuthorizationError, WorkflowError
 from app.schemas.related_incident import (
     CandidateDecisionState,
     CandidateMatch,
@@ -44,6 +47,8 @@ pytestmark = pytest.mark.integration
 async def the_session():
     if settings.app_env.lower() == "production":
         pytest.skip("Never run the related-incident integration test against production")
+    if os.environ.get("REEFCARE_INTEGRATION_TARGET") != "staging":
+        pytest.skip("Set REEFCARE_INTEGRATION_TARGET=staging after verifying the actual database URL is a disposable staging branch")
 
     the_engine_handle = create_async_engine(settings.database_url, poolclass=NullPool)
 
@@ -73,7 +78,7 @@ async def the_session():
     await the_engine_handle.dispose()
 
 
-async def find_fixture_rows(the_db: AsyncSession) -> dict:
+async def find_fixture_rows(the_db: AsyncSession, minimum_reports: int = 2) -> dict:
     """
     One active Coordinator, two unclaimed received reports, and (optionally)
     a report owned by a different Coordinator for the AC4 filter.
@@ -94,16 +99,38 @@ async def find_fixture_rows(the_db: AsyncSession) -> dict:
         await the_db.execute(text(
             """
             SELECT r.report_id, r.report_reference
-            FROM report AS r JOIN case_status AS cs ON cs.case_status_id = r.current_status_id
-            WHERE r.claimed_by_user_id IS NULL AND r.deleted_at IS NULL
-              AND cs.code = 'received' AND r.incident_id IS NULL
-            ORDER BY r.report_id LIMIT 2
+            FROM report AS r
+            JOIN case_status AS cs
+            ON cs.case_status_id = r.current_status_id
+            WHERE r.claimed_by_user_id IS NULL
+            AND r.deleted_at IS NULL
+            AND cs.code = 'received'
+            AND r.incident_id IS NULL
+
+            -- Do not reuse reports that already have detection history.
+            AND NOT EXISTS (
+                SELECT 1
+                FROM related_incident_run AS rir
+                WHERE rir.report_id = r.report_id
+            )
+
+            -- Do not reuse reports involved in an earlier human
+            -- relationship decision.
+            AND NOT EXISTS (
+                SELECT 1
+                FROM report_relationship_decision AS rrd
+                WHERE rrd.report_id = r.report_id
+                    OR rrd.related_report_id = r.report_id
+            )
+
+            ORDER BY r.report_id
+            LIMIT :fixture_limit
             """
-        ))
+        ), {"fixture_limit": minimum_reports})
     ).mappings().all()
 
-    if the_coordinator is None or len(the_unclaimed) < 2:
-        pytest.skip("Needs one active coordinator and two unclaimed received reports")
+    if the_coordinator is None or len(the_unclaimed) < minimum_reports:
+        pytest.skip(f"Needs one active coordinator and {minimum_reports} fresh unclaimed received reports")
 
     the_other_owned = (
         await the_db.execute(text(
@@ -123,6 +150,7 @@ async def find_fixture_rows(the_db: AsyncSession) -> dict:
         "source": dict(the_unclaimed[0]),
         "candidate": dict(the_unclaimed[1]),
         "other_owned": dict(the_other_owned) if the_other_owned else None,
+        "reports": [dict(row) for row in the_unclaimed],
     }
 
 
@@ -171,12 +199,17 @@ async def test_related_incident_end_to_end(the_session, monkeypatch):
         )
 
     async def the_fake_matcher(the_source, the_pool, rules=None):
-        return DetectionOutcome(DetectionRunState.COMPLETED, the_fake_matches)
+        return DetectionOutcome(
+            DetectionRunState.COMPLETED,
+            the_fake_matches,
+        )
 
     monkeypatch.setattr(the_engine, "match_related_reports", the_fake_matcher)
 
     assert (
-        await the_engine.run_related_incident_detection(the_session, the_source_ref)
+        await the_engine.run_related_incident_detection(
+            the_session, the_source_ref, force=True, generate_embeddings=False
+        )
         == DetectionRunState.COMPLETED
     )
 
@@ -234,3 +267,66 @@ async def test_related_incident_end_to_end(the_session, monkeypatch):
             text("UPDATE report SET incident_id = NULL WHERE report_reference = :ref"),
             {"ref": the_source_ref},
         )
+
+
+async def snapshot_fixture(the_db, report_ids):
+    async def rows(sql):
+        statement = text(sql).bindparams(bindparam("ids", expanding=True))
+        return [dict(row) for row in (await the_db.execute(statement, {"ids": report_ids})).mappings().all()]
+    return {
+        "reports": await rows("SELECT report_id,report_reference,current_status_id,claimed_by_user_id,incident_id,description FROM report WHERE report_id IN :ids ORDER BY report_id"),
+        "evidence": await rows("SELECT evidence_id,report_id,file_reference,uploaded_at FROM evidence WHERE report_id IN :ids ORDER BY evidence_id"),
+        "incidents": await rows("SELECT * FROM incident WHERE incident_id IN (SELECT incident_id FROM report WHERE report_id IN :ids) ORDER BY incident_id"),
+        "decisions": await rows("SELECT * FROM report_relationship_decision WHERE report_id IN :ids OR related_report_id IN :ids ORDER BY report_relationship_decision_id"),
+    }
+
+
+@pytest.mark.parametrize("case,minimum_reports", [
+    ("neither", 2), ("first_existing", 3), ("second_existing", 3),
+    ("already_same", 2), ("different_groups", 4),
+])
+@pytest.mark.asyncio
+async def test_five_incident_membership_cases(the_session, case, minimum_reports):
+    fixture = await find_fixture_rows(the_session, minimum_reports)
+    coordinator = fixture["coordinator_id"]
+    refs = [row["report_reference"] for row in fixture["reports"]]
+    ids = [row["report_id"] for row in fixture["reports"]]
+    for ref in refs:
+        await claim_report(the_session, ref, coordinator)
+    request = RelationshipDecisionCreate(decision="same_incident")
+    target_first, target_second = refs[:2]
+    if case != "neither":
+        await the_service.record_relationship_decision(the_session, refs[0], refs[1], coordinator, request)
+    if case == "first_existing":
+        target_second = refs[2]
+    elif case == "second_existing":
+        target_first, target_second = refs[2], refs[0]
+    elif case == "different_groups":
+        await the_service.record_relationship_decision(the_session, refs[2], refs[3], coordinator, request)
+        target_first, target_second = refs[0], refs[2]
+    before = await snapshot_fixture(the_session, ids)
+    if case == "different_groups":
+        # The old SQL function can merge if called directly; this test checks
+        # the application policy with no SQL-function replacement.
+        for first, second in [(target_first, target_second), (target_second, target_first)]:
+            with pytest.raises(WorkflowError, match="Combining incident groups"):
+                await the_service.record_relationship_decision(
+                    the_session, first, second, coordinator, request)
+            assert await snapshot_fixture(the_session, ids) == before
+        return
+    response = await the_service.record_relationship_decision(
+        the_session, target_first, target_second, coordinator, request)
+    after = await snapshot_fixture(the_session, ids)
+    selected = [row for row in after["reports"] if row["report_reference"] in (target_first,target_second)]
+    assert selected[0]["incident_id"] is not None
+    assert selected[0]["incident_id"] == selected[1]["incident_id"]
+    assert response.incident_reference == next(row["incident_reference"] for row in after["incidents"]
+                                               if row["incident_id"] == selected[0]["incident_id"])
+    assert [{k:v for k,v in row.items() if k != "incident_id"} for row in after["reports"]] == [
+        {k:v for k,v in row.items() if k != "incident_id"} for row in before["reports"]]
+    assert after["evidence"] == before["evidence"]
+    assert len(after["incidents"]) == len(before["incidents"]) + int(case == "neither")
+    if case == "already_same":
+        assert after == before
+    else:
+        assert len(after["decisions"]) == len(before["decisions"]) + 1
