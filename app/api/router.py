@@ -13,9 +13,11 @@ from app.api.routes import (
     planning,
     plans,
     public,
+    public_context,
     reference,
     related_incidents,
     reports,
+    site_history,
 )
 
 
@@ -42,6 +44,11 @@ api_router.include_router(
     tags=["Administration"],
 )
 
+api_router.include_router(
+    public_context.router,
+    prefix="/public",
+    tags=["Public Reef Information"],
+)
 
 api_router.include_router(
     public.router,
@@ -83,6 +90,13 @@ api_router.include_router(
     related_incidents.router,
     prefix="/coordinator",
     tags=["Related Incidents"],
+)
+
+
+api_router.include_router(
+    site_history.router,
+    prefix="/coordinator",
+    tags=["Site History"],
 )
 
 
