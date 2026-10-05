@@ -6,6 +6,7 @@ from datetime import (
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     File,
     Form,
     HTTPException,
@@ -97,6 +98,9 @@ from app.services.smart_report_service import (
 )
 from app.services.visual_recognition_service import (
     recognize_visual_threat,
+)
+from app.services.related_incident_detection_service import (
+    run_related_incident_detection_in_background,
 )
 
 
@@ -516,6 +520,7 @@ async def get_my_report(
     ),
 )
 async def submit_report(
+    background_tasks: BackgroundTasks,
     current_observer: CurrentObserver,
     db: DatabaseSession,
     payload: str = Form(...),
@@ -540,9 +545,16 @@ async def submit_report(
             )
         )
 
-        return ReportSubmittedResponse(
+        confirmation = ReportSubmittedResponse(
             **result
         )
+        # submit_report_service has committed the report and evidence. The
+        # task runs after the response and opens its own database session.
+        background_tasks.add_task(
+            run_related_incident_detection_in_background,
+            confirmation.report_reference,
+        )
+        return confirmation
 
     except ValidationError as exc:
         # F03:
