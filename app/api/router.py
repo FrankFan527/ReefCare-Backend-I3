@@ -7,6 +7,7 @@ from app.api.routes import (
     coordinator,
     dive_sessions,
     evidence,
+    external_context,
     follow_ups,
     health,
     hotspots,
@@ -49,6 +50,13 @@ api_router.include_router(
     prefix="/public",
     tags=["Public Reef Information"],
 )
+
+api_router.include_router(
+    external_context.router,
+    prefix="/public",
+    tags=["Public Reef Information"],
+)
+
 
 api_router.include_router(
     public.router,
