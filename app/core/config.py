@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     related_incident_images_enabled: bool = True
     # Enable generation in a persistent worker. API processes can score cached
     # embeddings without importing PyTorch or downloading any model.
-    related_incident_generate_embeddings: bool = True
+    related_incident_generate_embeddings: bool = False
     related_incident_image_weights_path: str = "models/resnet18-f37072fd.pth"
     related_incident_image_threshold: float = Field(default=0.80, gt=0, le=1)
     related_incident_image_top_k: int = Field(default=10, ge=1, le=100)
