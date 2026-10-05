@@ -264,104 +264,285 @@ async def _rollback_safely(db: AsyncSession) -> None:
         logger.warning("Related-incident rollback failed (%s)", type(error).__name__)
 
 
-async def run_related_incident_detection(db: AsyncSession, report_reference: str,
-                                         *, generate_embeddings: bool | None = None, 
-                                         force: bool = False) -> DetectionRunState | None:
-    """One bounded transaction sequence; cached snapshots skip needless reruns.
+async def run_related_incident_detection(
+    db: AsyncSession,
+    report_reference: str,
+    *,
+    generate_embeddings: bool = False,
+    force: bool = False,
+) -> DetectionRunState | None:
+    """Run bounded related-incident detection for one committed report.
 
-    Submission schedules this after its commit. A persistent worker also scans
-    committed reports, so process loss and supplemental evidence are recovered.
-    Images fail independently; database/matching failures mark the whole run failed.
+    Report submission schedules this after its commit. When requested,
+    missing image embeddings for the newly submitted report are generated
+    before matching.
+
+    Image-generation failure does not prevent the remaining US5.9 signals
+    from being evaluated. Database/matching failures mark the run failed.
     """
     run_id: int | None = None
+
     try:
-        async with asyncio.timeout(settings.related_incident_timeout_seconds):
-            source_row = await the_repository.get_report_comparison_facts(db=db, report_reference=report_reference)
-            
+        async with asyncio.timeout(
+            settings.related_incident_timeout_seconds
+        ):
+            source_row = (
+                await the_repository.get_report_comparison_facts(
+                    db=db,
+                    report_reference=report_reference,
+                )
+            )
+
             if source_row is None:
                 return None
-            
+
             source = ReportComparisonFacts(**source_row)
             rules = MatchingRules()
-            
+
             pool_rows = []
+
             if source.observed_at is not None:
-                pool_rows = await the_repository.list_candidate_comparison_facts(
-                    db=db, source_report_id=source.report_id,
-                    observed_from=source.observed_at-CANDIDATE_WINDOW,
-                    observed_to=source.observed_at+CANDIDATE_WINDOW, limit=CANDIDATE_POOL_LIMIT)
-            
-            pool = _eligible_pool(source, [ReportComparisonFacts(**row) for row in pool_rows], rules)
-            
+                pool_rows = (
+                    await the_repository.list_candidate_comparison_facts(
+                        db=db,
+                        source_report_id=source.report_id,
+                        observed_from=(
+                            source.observed_at - CANDIDATE_WINDOW
+                        ),
+                        observed_to=(
+                            source.observed_at + CANDIDATE_WINDOW
+                        ),
+                        limit=CANDIDATE_POOL_LIMIT,
+                    )
+                )
+
+            pool = _eligible_pool(
+                source,
+                [
+                    ReportComparisonFacts(**row)
+                    for row in pool_rows
+                ],
+                rules,
+            )
+
             image_rows = []
             image_state = ImageAnalysisState.DISABLED
+
             if rules.images_enabled:
-                ids = [source.report_id, *[report.report_id for report in pool]]
-                image_rows = await image_embedding_repository.list_image_inputs(db, ids, settings.related_incident_images_per_report)
-                generate = settings.related_incident_generate_embeddings if generate_embeddings is None else generate_embeddings
-                if generate:
-                    source_images = [row for row in image_rows if row["report_id"] == source.report_id]
-                    try:
-                        # Leave time for text/structure, persistence and cleanup.
-                        async with asyncio.timeout(settings.related_incident_timeout_seconds / 2):
-                            await image_service.generate_missing_embeddings(db, source_images)
-                    except TimeoutError:
-                        logger.warning("Image generation budget exhausted for %s", report_reference)
-                    await db.commit()
-                    image_rows = await image_embedding_repository.list_image_inputs(db, ids, settings.related_incident_images_per_report)
-                source, pool, image_state = image_service.attach_embeddings(source, pool, image_rows)
-            
-            fingerprint = _input_fingerprint(source, pool, image_rows, rules)
-            
-            latest = await the_repository.get_latest_detection_run(db=db, report_id=source.report_id)
-            
-            if (not force and latest and latest.get("rule_version") == RULE_VERSION
-                    and latest.get("input_fingerprint") == fingerprint
-                    and latest["run_state"] in ("completed", "insufficient_information")):
-                return DetectionRunState(latest["run_state"])
-            run_id = await the_repository.begin_detection_run(db=db, report_id=source.report_id,
-                                                              rule_version=RULE_VERSION, input_fingerprint=fingerprint)
+                ids = [
+                    source.report_id,
+                    *[
+                        report.report_id
+                        for report in pool
+                    ],
+                ]
+
+                image_rows = (
+                    await image_embedding_repository.list_image_inputs(
+                        db,
+                        ids,
+                        settings.related_incident_images_per_report,
+                    )
+                )
+
+                if generate_embeddings:
+                    # Only generate embeddings for the newly submitted
+                    # source report. Candidate reports should already have
+                    # cached embeddings from their own submission.
+                    source_images = [
+                        row
+                        for row in image_rows
+                        if row["report_id"] == source.report_id
+                    ]
+
+                    if source_images:
+                        try:
+                            async with asyncio.timeout(
+                                settings.related_incident_timeout_seconds
+                                / 2
+                            ):
+                                await (
+                                    image_service
+                                    .generate_missing_embeddings(
+                                        db,
+                                        source_images,
+                                    )
+                                )
+
+                            # Persist embeddings independently from the
+                            # later detection transaction.
+                            await db.commit()
+
+                        except TimeoutError:
+                            logger.warning(
+                                "Image generation budget exhausted "
+                                "for %s",
+                                report_reference,
+                            )
+
+                            # Cancellation may have interrupted DB work.
+                            await _rollback_safely(db)
+
+                        # Reload from DB so matching only uses
+                        # successfully persisted embeddings.
+                        image_rows = (
+                            await image_embedding_repository
+                            .list_image_inputs(
+                                db,
+                                ids,
+                                settings
+                                .related_incident_images_per_report,
+                            )
+                        )
+
+                source, pool, image_state = (
+                    image_service.attach_embeddings(
+                        source,
+                        pool,
+                        image_rows,
+                    )
+                )
+
+            fingerprint = _input_fingerprint(
+                source,
+                pool,
+                image_rows,
+                rules,
+            )
+
+            latest = (
+                await the_repository.get_latest_detection_run(
+                    db=db,
+                    report_id=source.report_id,
+                )
+            )
+
+            if (
+                not force
+                and latest
+                and latest.get("rule_version") == RULE_VERSION
+                and latest.get("input_fingerprint") == fingerprint
+                and latest["run_state"]
+                in (
+                    "completed",
+                    "insufficient_information",
+                )
+            ):
+                return DetectionRunState(
+                    latest["run_state"]
+                )
+
+            run_id = await the_repository.begin_detection_run(
+                db=db,
+                report_id=source.report_id,
+                rule_version=RULE_VERSION,
+                input_fingerprint=fingerprint,
+            )
+
             if run_id is None:
                 await _rollback_safely(db)
                 return DetectionRunState.PROCESSING
-            
+
             await db.commit()
-            
-            outcome = await match_related_reports(source, pool, rules)
-            
-            if outcome.run_state not in (DetectionRunState.COMPLETED, DetectionRunState.INSUFFICIENT_INFORMATION):
-                raise ValueError("Invalid detection outcome")
-            
-            if outcome.run_state == DetectionRunState.COMPLETED:
-                await the_repository.save_detection_candidates(db=db, run_id=run_id, report_id=source.report_id, candidates=outcome.candidates)
-            
-            await the_repository.finish_detection_run(db=db, run_id=run_id, run_state=outcome.run_state, image_analysis_state=image_state)
+
+            outcome = await match_related_reports(
+                source,
+                pool,
+                rules,
+            )
+
+            if outcome.run_state not in (
+                DetectionRunState.COMPLETED,
+                DetectionRunState.INSUFFICIENT_INFORMATION,
+            ):
+                raise ValueError(
+                    "Invalid detection outcome"
+                )
+
+            if (
+                outcome.run_state
+                == DetectionRunState.COMPLETED
+            ):
+                await (
+                    the_repository.save_detection_candidates(
+                        db=db,
+                        run_id=run_id,
+                        report_id=source.report_id,
+                        candidates=outcome.candidates,
+                    )
+                )
+
+            await the_repository.finish_detection_run(
+                db=db,
+                run_id=run_id,
+                run_state=outcome.run_state,
+                image_analysis_state=image_state,
+            )
+
             await db.commit()
-            
+
             return outcome.run_state
-    
+
     except Exception as error:
-        logger.warning("Related-incident detection failed for %s (%s)", report_reference, type(error).__name__)
-        
+        logger.warning(
+            "Related-incident detection failed for %s (%s)",
+            report_reference,
+            type(error).__name__,
+        )
+
         await _rollback_safely(db)
-        
+
         if run_id is not None:
             try:
                 async with asyncio.timeout(5):
-                    await the_repository.finish_detection_run(db=db, run_id=run_id, run_state=DetectionRunState.FAILED,
-                                                             image_analysis_state=ImageAnalysisState.UNAVAILABLE)
+                    await the_repository.finish_detection_run(
+                        db=db,
+                        run_id=run_id,
+                        run_state=DetectionRunState.FAILED,
+                        image_analysis_state=(
+                            ImageAnalysisState.UNAVAILABLE
+                        ),
+                    )
+
                     await db.commit()
+
             except Exception as cleanup_error:
-                logger.warning("Related-incident failure could not be recorded (%s)", type(cleanup_error).__name__)
+                logger.warning(
+                    "Related-incident failure could not "
+                    "be recorded (%s)",
+                    type(cleanup_error).__name__,
+                )
+
                 await _rollback_safely(db)
-        
+
         return DetectionRunState.FAILED
 
 
-async def run_related_incident_detection_in_background(report_reference: str) -> None:
-    """FastAPI background entry point; never reuse the submission session."""
+async def run_related_incident_detection_in_background(
+    report_reference: str,
+) -> None:
+    """
+    Submission-triggered US5.9 processing.
+
+    Generate missing embeddings for this newly
+    submitted report, then perform matching.
+    """
+
     try:
+
         async with AsyncSessionLocal() as session:
-            await run_related_incident_detection(db=session, report_reference=report_reference)
+
+            await run_related_incident_detection(
+                db=session,
+                report_reference=report_reference,
+                generate_embeddings=True,
+            )
+
     except Exception as error:
-        logger.warning("Related-incident background task failed for %s (%s)", report_reference, type(error).__name__)
+
+        logger.warning(
+            "Related-incident background "
+            "task failed for %s (%s)",
+            report_reference,
+            type(error).__name__,
+        )

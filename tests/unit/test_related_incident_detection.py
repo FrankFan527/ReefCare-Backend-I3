@@ -176,3 +176,52 @@ async def test_failure_cleanup_also_failing_does_not_escape(monkeypatch):
     db = AsyncMock()
     db.rollback.side_effect = RuntimeError("Rollback unavailable")
     assert await engine.run_related_incident_detection(db, "RC-0001") == DetectionRunState.FAILED
+
+
+@pytest.mark.asyncio
+async def test_background_detection_enables_embedding_generation(
+    monkeypatch,
+):
+
+    from contextlib import (
+        asynccontextmanager,
+    )
+
+    run = AsyncMock()
+
+    @asynccontextmanager
+    async def session():
+        yield AsyncMock()
+
+    monkeypatch.setattr(
+        engine,
+        "AsyncSessionLocal",
+        session,
+    )
+
+    monkeypatch.setattr(
+        engine,
+        "run_related_incident_detection",
+        run,
+    )
+
+    await (
+        engine
+        .run_related_incident_detection_in_background(
+            "RC-0001"
+        )
+    )
+
+    assert (
+        run.await_args.kwargs[
+            "report_reference"
+        ]
+        == "RC-0001"
+    )
+
+    assert (
+        run.await_args.kwargs[
+            "generate_embeddings"
+        ]
+        is True
+    )
