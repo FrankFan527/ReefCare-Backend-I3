@@ -68,6 +68,16 @@ class RelatednessLevel(str, Enum):
     LOW = "low"
 
 
+class ImageAnalysisState(str, Enum):
+    NOT_ANALYSED = "not_analysed"
+    DISABLED = "disabled"
+    NO_SOURCE_IMAGES = "no_source_images"
+    UNAVAILABLE = "unavailable"
+    INSUFFICIENT_HISTORY = "insufficient_history"
+    PARTIAL = "partial"
+    READY = "ready"
+
+
 class CandidateOwnershipState(str, Enum):
     """
     Only these two are ever shown (AC4). A candidate owned by another
@@ -98,6 +108,16 @@ class CandidateDecisionState(str, Enum):
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class ImageEmbedding:
+    """Internal only: compatible, normalised vision features, never API data."""
+
+    evidence_id: int
+    vector: tuple[float, ...]
+    model: str
+    version: str
+
+
+@dataclass(frozen=True)
 class ReportComparisonFacts:
     """
     The eligible facts of one report, as handed to the detection engine.
@@ -113,8 +133,8 @@ class ReportComparisonFacts:
 
     report_id: int
     report_reference: str
-    observed_at: datetime
-    threat_category_code: str
+    observed_at: datetime | None
+    threat_category_code: str | None
 
     dive_site_id: int | None = None
     dive_site_name: str | None = None
@@ -127,6 +147,7 @@ class ReportComparisonFacts:
 
     estimated_depth_metres: Decimal | None = None
     description: str | None = None
+    image_embeddings: tuple[ImageEmbedding, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -140,6 +161,8 @@ class CandidateSignal:
 
     code: str
     detail: str | None = None
+    signal_score: Decimal | None = None
+    signal_weight: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -177,6 +200,8 @@ class RelatedReportSignal(APIModel):
     label: str
 
     detail: str | None = None
+    signal_score: float | None = Field(default=None, ge=0, le=1)
+    signal_weight: float | None = Field(default=None, ge=0, le=1)
 
 
 class RelatedReportCandidate(APIModel):
@@ -187,6 +212,7 @@ class RelatedReportCandidate(APIModel):
 
     candidate_report_reference: str
     relatedness_level: RelatednessLevel
+    relatedness_score: float | None = Field(default=None, ge=0, le=1)
 
     signals: list[RelatedReportSignal] = Field(default_factory=list)
 
@@ -207,6 +233,9 @@ class RelatedReportsResponse(APIModel):
     message: str
 
     rule_version: str | None = None
+    input_version: int | None = None
+    image_analysis_state: ImageAnalysisState = ImageAnalysisState.NOT_ANALYSED
+    image_analysis_message: str = "Image analysis has not completed."
     analysed_at: datetime | None = None
 
     candidates: list[RelatedReportCandidate] = Field(default_factory=list)
@@ -270,6 +299,7 @@ class ReportComparisonResponse(APIModel):
     # signals from the latest run that suggested this pair, if any
     signals: list[RelatedReportSignal] = Field(default_factory=list)
     relatedness_level: RelatednessLevel | None = None
+    relatedness_score: float | None = Field(default=None, ge=0, le=1)
 
     latest_decision: LatestRelationshipDecision | None = None
 
