@@ -1,40 +1,165 @@
-"""Download the official ResNet18 weights once, before starting the worker."""
+"""Export ResNet18 avgpool features to ONNX."""
+
 import argparse
 import hashlib
+
 from pathlib import Path
-import ssl
-import urllib.request
-
-URL = "https://download.pytorch.org/models/resnet18-f37072fd.pth"
-SHA256 = "f37072fd47e89c5e827621c5baffa7500819f7896bbacec160b1a16c560e07ec"
 
 
-def main(output: Path):
-    if output.is_file() and hashlib.sha256(output.read_bytes()).hexdigest() == SHA256:
-        print(f"Verified existing model: {output}")
-        return
-    output.parent.mkdir(parents=True, exist_ok=True)
-    # Verify HTTPS certificates using the same CA bundle as the backend client.
-    try:
-        import certifi
-        context = ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        context = ssl.create_default_context()
-    temporary = output.with_suffix(".download")
-    try:
-        with urllib.request.urlopen(URL, context=context, timeout=60) as response, temporary.open("wb") as target:
-            while chunk := response.read(1024*1024):
-                target.write(chunk)
-        digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
-        if digest != SHA256:
-            raise ValueError("Official model checksum does not match")
-        temporary.replace(output)
-        print(f"Downloaded and verified model: {output} ({digest})")
-    finally:
-        temporary.unlink(missing_ok=True)
+WEIGHTS_SHA256 = (
+    "f37072fd47e89c5e827621c5baffa750"
+    "0819f7896bbacec160b1a16c560e07ec"
+)
+
+
+def sha256_file(
+    path: Path,
+) -> str:
+
+    digest = hashlib.sha256()
+
+    with path.open("rb") as handle:
+
+        for chunk in iter(
+            lambda: handle.read(
+                1024 * 1024
+            ),
+            b"",
+        ):
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def export_onnx(
+    weights_path: Path,
+    output_path: Path,
+):
+
+    import torch
+
+    from torchvision.models import (
+        resnet18,
+    )
+
+    if not weights_path.is_file():
+
+        raise FileNotFoundError(
+            f"Missing weights: "
+            f"{weights_path}"
+        )
+
+    if (
+        sha256_file(
+            weights_path
+        )
+        != WEIGHTS_SHA256
+    ):
+        raise ValueError(
+            "Unexpected ResNet18 "
+            "weight checksum"
+        )
+
+    model = resnet18(
+        weights=None
+    )
+
+    model.load_state_dict(
+        torch.load(
+            weights_path,
+            map_location="cpu",
+            weights_only=True,
+        )
+    )
+
+    # Return 512-dimensional avgpool features
+    # instead of ImageNet classification logits.
+    model.fc = torch.nn.Identity()
+
+    model.eval()
+
+    dummy = torch.zeros(
+        1,
+        3,
+        224,
+        224,
+        dtype=torch.float32,
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    torch.onnx.export(
+        model,
+        dummy,
+        str(output_path),
+        input_names=["input"],
+        output_names=["embedding"],
+        dynamic_axes={
+            "input": {
+                0: "batch"
+            },
+            "embedding": {
+                0: "batch"
+            },
+        },
+        opset_version=18,
+        do_constant_folding=True,
+        dynamo=False,
+    )
+
+    digest = sha256_file(
+        output_path
+    )
+
+    checksum_path = (
+        output_path.with_suffix(
+            output_path.suffix
+            + ".sha256"
+        )
+    )
+
+    checksum_path.write_text(
+        digest + "\n",
+        encoding="utf-8",
+    )
+
+    print(
+        f"Exported: {output_path}"
+    )
+
+    print(
+        f"SHA256: {digest}"
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=Path("models/resnet18-f37072fd.pth"))
-    main(parser.parse_args().output)
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--weights",
+        type=Path,
+        default=Path(
+            "models/"
+            "resnet18-f37072fd.pth"
+        ),
+    )
+
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(
+            "models/"
+            "resnet18-avgpool512.onnx"
+        ),
+    )
+
+    args = parser.parse_args()
+
+    export_onnx(
+        args.weights,
+        args.output,
+    )
