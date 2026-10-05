@@ -3,7 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundError
 from app.repositories.public_repository import (
     get_public_site,
-    list_public_site_activity,
+)
+from app.services.public_context_service import (
+    list_publishable_activity_entries,
 )
 
 
@@ -91,32 +93,37 @@ async def get_public_activity(
             "Dive site not found"
         )
 
-    rows = await list_public_site_activity(
+    # US8.2 AC5: the publishable set comes from the shared E8
+    # public-safe service, so this endpoint and
+    # /dive-sites/{id}/context cannot drift apart on what may be
+    # published.
+    entries = await list_publishable_activity_entries(
         db=db,
         dive_site_id=dive_site_id,
+        include_follow_ups=False,
     )
 
     items = [
         {
             "activity_id":
-                row["public_activity_id"],
+                entry.activity_id,
 
             "activity_type":
-                row["activity_type"],
+                entry.activity_type,
 
             "title":
-                row["title"],
+                entry.title,
 
             "summary":
-                row["summary"],
+                entry.summary,
 
             "activity_date":
-                row["activity_date"],
+                entry.activity_date,
 
             "source_label":
-                row["source_label"],
+                entry.source_label,
         }
-        for row in rows
+        for entry in entries
     ]
 
     if items:
