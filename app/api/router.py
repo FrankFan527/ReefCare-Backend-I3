@@ -7,15 +7,18 @@ from app.api.routes import (
     coordinator,
     dive_sessions,
     evidence,
+    external_context,
     follow_ups,
     health,
     hotspots,
     planning,
     plans,
     public,
+    public_context,
     reference,
     related_incidents,
     reports,
+    site_history,
 )
 
 
@@ -40,6 +43,18 @@ api_router.include_router(
     admin.router,
     prefix="/admin",
     tags=["Administration"],
+)
+
+api_router.include_router(
+    public_context.router,
+    prefix="/public",
+    tags=["Public Reef Information"],
+)
+
+api_router.include_router(
+    external_context.router,
+    prefix="/public",
+    tags=["Public Reef Information"],
 )
 
 
@@ -83,6 +98,13 @@ api_router.include_router(
     related_incidents.router,
     prefix="/coordinator",
     tags=["Related Incidents"],
+)
+
+
+api_router.include_router(
+    site_history.router,
+    prefix="/coordinator",
+    tags=["Site History"],
 )
 
 
