@@ -13,12 +13,15 @@
 # re-check ownership inside the database (RC403) regardless.
 # ---------------------------------------------------------------------------
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import NoReturn
 
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
 
 from app.core.exceptions import (
     AuthorizationError,
@@ -35,6 +38,7 @@ from app.schemas.related_incident import (
     ComparisonEvidenceItem,
     ComparisonReportSide,
     DetectionRunState,
+    ImageAnalysisState,
     LatestRelationshipDecision,
     RejectionReasonOption,
     RelatedAnalysisState,
@@ -53,6 +57,16 @@ from app.services.case_workflow_service import load_owned_case
 
 
 logger = logging.getLogger(__name__)
+
+IMAGE_ANALYSIS_MESSAGES = {
+    ImageAnalysisState.NOT_ANALYSED: "Image analysis has not completed.",
+    ImageAnalysisState.DISABLED: "Image comparison is disabled.",
+    ImageAnalysisState.NO_SOURCE_IMAGES: "This report has no eligible photos to compare.",
+    ImageAnalysisState.UNAVAILABLE: "Image comparison is unavailable. Review the available report details.",
+    ImageAnalysisState.INSUFFICIENT_HISTORY: "No compatible historical photo features were available in the comparison pool.",
+    ImageAnalysisState.PARTIAL: "Some photos could not be compared; available photos and report details were used.",
+    ImageAnalysisState.READY: "Eligible cached photo features were compared within the report pool.",
+}
 
 
 # a run still "processing" after this long is treated as dead; on Vercel a
@@ -234,17 +248,22 @@ async def get_related_reports(
     )
 
     try:
-        return await _build_related_reports(
-            db=db,
-            report_reference=report_reference,
-            coordinator_id=coordinator_id,
-        )
+        async with asyncio.timeout(settings.related_incident_timeout_seconds):
+            return await _build_related_reports(
+                db=db,
+                report_reference=report_reference,
+                coordinator_id=coordinator_id,
+            )
 
-    except SQLAlchemyError:
-        logger.exception(
-            "Related-report analysis could not be read for %s",
-            report_reference,
-        )
+    except (SQLAlchemyError, ValueError, KeyError, TypeError, TimeoutError) as error:
+        # Corrupt analysis rows also degrade gracefully. Avoid SQL parameters
+        # in logs, and clear a failed transaction before this session is reused.
+        logger.warning("Related-report analysis could not be read for %s (%s)",
+                       report_reference, type(error).__name__)
+        try:
+            await asyncio.wait_for(db.rollback(), timeout=5)
+        except Exception:
+            logger.warning("Related-report analysis rollback failed")
 
         return RelatedReportsResponse(
             report_reference=report_reference,
@@ -289,12 +308,16 @@ async def _build_related_reports(
         the_actionable_candidate_count=len(the_candidates),
         the_now=utc_now(),
     )
+    image_state = ImageAnalysisState(the_run.get("image_analysis_state", "not_analysed")) if the_run else ImageAnalysisState.NOT_ANALYSED
 
     return RelatedReportsResponse(
         report_reference=report_reference,
         analysis_state=the_state,
         message=THE_ANALYSIS_MESSAGES[the_state],
         rule_version=the_run["rule_version"] if the_run else None,
+        input_version=the_run.get("input_version") if the_run else None,
+        image_analysis_state=image_state,
+        image_analysis_message=IMAGE_ANALYSIS_MESSAGES[image_state],
         analysed_at=the_run["finished_at"] if the_run else None,
         candidates=the_candidates,
     )
@@ -345,6 +368,8 @@ async def _build_actionable_candidates(
                 code=the_signal["code"],
                 label=the_signal["label"],
                 detail=the_signal["detail"],
+                signal_score=the_signal.get("signal_score"),
+                signal_weight=the_signal.get("signal_weight"),
             )
         )
 
@@ -393,6 +418,7 @@ async def _build_actionable_candidates(
             RelatedReportCandidate(
                 candidate_report_reference=the_row["candidate_report_reference"],
                 relatedness_level=the_row["relatedness_level"],
+                relatedness_score=the_row.get("similarity_score"),
                 signals=the_signals_by_candidate.get(
                     the_row["related_incident_candidate_id"], []
                 ),
@@ -498,8 +524,8 @@ async def compare_reports(
     await load_owned_case(db=db, report_reference=report_reference, coordinator_id=coordinator_id)
     await load_owned_case(db=db, report_reference=candidate_reference, coordinator_id=coordinator_id)
 
-    the_current_side = await the_repository.get_comparison_side(db=db, report_reference=report_reference)
-    the_candidate_side = await the_repository.get_comparison_side(db=db, report_reference=candidate_reference)
+    the_current_side = await the_repository.get_comparison_side(db=db, report_reference=report_reference, coordinator_id=coordinator_id)
+    the_candidate_side = await the_repository.get_comparison_side(db=db, report_reference=candidate_reference, coordinator_id=coordinator_id)
 
     if the_current_side is None or the_candidate_side is None:
         raise NotFoundError("Report not found")
@@ -524,6 +550,7 @@ async def compare_reports(
             for the_signal in (the_suggestion or {}).get("signals", [])
         ],
         relatedness_level=(the_suggestion or {}).get("relatedness_level"),
+        relatedness_score=(the_suggestion or {}).get("similarity_score"),
         latest_decision=(
             LatestRelationshipDecision(**the_decision)
             if the_decision is not None
