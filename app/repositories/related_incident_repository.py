@@ -342,6 +342,35 @@ async def finish_detection_run(
 # WORKFLOW — reads
 # ===========================================================================
 
+async def lock_relationship_reports(
+    db: AsyncSession,
+    report_reference: str,
+    related_reference: str,
+) -> dict[str, dict]:
+    """Return current identities with locks held until commit or rollback.
+
+    Acquire the SAME advisory lock as reefcare_owned_relationship_pair()
+    before row locks, preserving the existing function's lock order. This
+    lets Python enforce the no-group-merge policy without replacing SQL
+    functions.
+    """
+    await db.execute(text("SELECT pg_advisory_xact_lock(59590001)"))
+    the_result = await db.execute(
+        text(
+            """
+            SELECT r.report_id, r.report_reference, r.claimed_by_user_id, r.incident_id
+            FROM public.report AS r
+            WHERE r.report_reference IN (:report_reference, :related_reference)
+              AND r.deleted_at IS NULL
+            ORDER BY r.report_id
+            FOR UPDATE OF r
+            """
+        ),
+        {"report_reference": report_reference, "related_reference": related_reference},
+    )
+    return {row["report_reference"]: dict(row) for row in the_result.mappings().all()}
+
+
 async def get_report_identity(
     db: AsyncSession,
     report_reference: str,
@@ -725,7 +754,9 @@ async def confirm_same_incident(
     """
     Call reefcare_confirm_same_incident(). Ownership, incident reuse, the
     incident_id update and the decision row all happen inside PostgreSQL in
-    one transaction. RC4xx errors propagate to the service for mapping.
+    one transaction. The service must lock and validate incident memberships
+    first: an existing production function may still merge distinct groups
+    when called directly. RC4xx errors propagate to the service for mapping.
     """
 
     the_result = await db.execute(

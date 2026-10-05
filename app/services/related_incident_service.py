@@ -98,6 +98,11 @@ THE_SQLSTATE_TO_SERVICE_ERROR: dict[str, type] = {
     "RC409": WorkflowError,
 }
 
+INCIDENT_GROUP_MERGE_BLOCKED_MESSAGE = (
+    "These reports belong to different incidents. "
+    "Combining incident groups is outside this workflow."
+)
+
 
 # ---------------------------------------------------------------------------
 # Small pure helpers (unit-tested without a database)
@@ -624,6 +629,11 @@ async def record_relationship_decision(
     """
     Persist one human decision through the PostgreSQL functions.
 
+    Confirmation may create an incident or attach a standalone report. It
+    cannot combine two distinct existing incident groups. Python checks the
+    current memberships while holding the existing function's transaction
+    lock and both report row locks; no SQL-function upgrade is required.
+
     Nothing here changes case status, ownership, evidence or closure (AC8).
     The caller does not commit; this function commits on success and rolls
     back on any failure.
@@ -632,27 +642,46 @@ async def record_relationship_decision(
     if report_reference == candidate_reference:
         raise DomainValidationError("A report cannot be related to itself")
 
-    # early, readable 403/404s; PostgreSQL re-checks ownership regardless
-    await load_owned_case(db=db, report_reference=report_reference, coordinator_id=coordinator_id)
-    await load_owned_case(db=db, report_reference=candidate_reference, coordinator_id=coordinator_id)
-
-    the_current = await the_repository.get_report_identity(db=db, report_reference=report_reference)
-    the_candidate = await the_repository.get_report_identity(db=db, report_reference=candidate_reference)
-
-    if the_current is None or the_candidate is None:
-        raise NotFoundError("Report not found")
-
-    the_suggestion = await _find_suggestion_either_direction(
-        db=db,
-        the_first_report_id=the_current["report_id"],
-        the_second_report_id=the_candidate["report_id"],
-    )
-
-    the_rule_version = the_suggestion["rule_version"] if the_suggestion else None
-
-    the_note = (the_request.note or "").strip() or None
-
     try:
+        # These preliminary ownership reads take no row locks. Check access
+        # before acquiring the shared confirmation lock or inspecting groups.
+        await load_owned_case(db=db, report_reference=report_reference, coordinator_id=coordinator_id)
+        await load_owned_case(db=db, report_reference=candidate_reference, coordinator_id=coordinator_id)
+
+        if the_request.decision == RelationshipDecision.SAME_INCIDENT:
+            the_locked = await the_repository.lock_relationship_reports(
+                db=db, report_reference=report_reference, related_reference=candidate_reference,
+            )
+            the_current = the_locked.get(report_reference)
+            the_candidate = the_locked.get(candidate_reference)
+        else:
+            the_current = await the_repository.get_report_identity(db=db, report_reference=report_reference)
+            the_candidate = await the_repository.get_report_identity(db=db, report_reference=candidate_reference)
+
+        if the_current is None or the_candidate is None:
+            raise NotFoundError("Report not found")
+
+        # Claims may have changed while waiting for a lock. Revalidate before
+        # exposing a membership conflict; SQL also verifies active ownership.
+        if any(row["claimed_by_user_id"] != coordinator_id for row in (the_current, the_candidate)):
+            raise AuthorizationError("Both reports must be owned by you")
+
+        if (
+            the_request.decision == RelationshipDecision.SAME_INCIDENT
+            and the_current["incident_id"] is not None
+            and the_candidate["incident_id"] is not None
+            and the_current["incident_id"] != the_candidate["incident_id"]
+        ):
+            raise WorkflowError(INCIDENT_GROUP_MERGE_BLOCKED_MESSAGE)
+
+        the_suggestion = await _find_suggestion_either_direction(
+            db=db,
+            the_first_report_id=the_current["report_id"],
+            the_second_report_id=the_candidate["report_id"],
+        )
+        the_rule_version = the_suggestion["rule_version"] if the_suggestion else None
+        the_note = (the_request.note or "").strip() or None
+
         if the_request.decision == RelationshipDecision.SAME_INCIDENT:
             the_saved = await the_repository.confirm_same_incident(
                 db=db,
@@ -685,6 +714,12 @@ async def record_relationship_decision(
         raise DatabaseOperationError(
             "The relationship decision could not be recorded"
         ) from the_error
+
+    except BaseException:
+        # Release locks for policy/ownership failures and cancelled requests,
+        # rather than keeping them until the request session is closed.
+        await db.rollback()
+        raise
 
     return RelationshipDecisionResponse(
         report_reference=report_reference,
