@@ -170,7 +170,7 @@ async def test_related_incident_end_to_end(the_session, monkeypatch):
             )
         )
 
-    async def the_fake_matcher(the_source, the_pool):
+    async def the_fake_matcher(the_source, the_pool, rules=None):
         return DetectionOutcome(DetectionRunState.COMPLETED, the_fake_matches)
 
     monkeypatch.setattr(the_engine, "match_related_reports", the_fake_matcher)

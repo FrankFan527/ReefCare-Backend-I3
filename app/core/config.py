@@ -26,6 +26,30 @@ class Settings(BaseSettings):
         le=60,
     )
 
+    # US5.9: explainable, data-assisted suggestions. Bump the rule version
+    # whenever a threshold changes so stored results retain their provenance.
+    related_incident_rule_version: str = Field(default="rid-v2-image", min_length=1, max_length=50)
+    related_incident_window_days: int = Field(default=7, ge=1, le=90)
+    related_incident_pool_limit: int = Field(default=200, ge=1, le=500)
+    related_incident_result_limit: int = Field(default=20, ge=1, le=100)
+    related_incident_timeout_seconds: float = Field(default=20, gt=0, le=60)
+    related_incident_nearby_metres: float = Field(default=500, gt=0, le=5000)
+    related_incident_depth_tolerance_metres: float = Field(default=5, gt=0, le=30)
+    related_incident_description_threshold: float = Field(default=0.35, gt=0, le=1)
+    related_incident_min_score: float = Field(default=0.55, gt=0, le=1)
+    related_incident_medium_score: float = Field(default=0.70, gt=0, le=1)
+    related_incident_high_score: float = Field(default=0.85, gt=0, le=1)
+    related_incident_images_enabled: bool = True
+    # Enable generation in a persistent worker. API processes can score cached
+    # embeddings without importing PyTorch or downloading any model.
+    related_incident_generate_embeddings: bool = True
+    related_incident_image_weights_path: str = "models/resnet18-f37072fd.pth"
+    related_incident_image_threshold: float = Field(default=0.80, gt=0, le=1)
+    related_incident_image_top_k: int = Field(default=10, ge=1, le=100)
+    related_incident_images_per_report: int = Field(default=8, ge=1, le=20)
+    related_incident_image_timeout_seconds: float = Field(default=12, gt=0, le=60)
+    related_incident_image_max_pixels: int = Field(default=20000000, ge=1000000, le=50000000)
+
     # Database
     database_url: str
 
@@ -171,6 +195,16 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_related_incident_thresholds(self):
+        if not (
+            self.related_incident_min_score
+            < self.related_incident_medium_score
+            < self.related_incident_high_score
+        ):
+            raise ValueError("Related-incident scores must satisfy minimum < medium < high")
+        return self
 
     @field_validator("app_env")
     @classmethod

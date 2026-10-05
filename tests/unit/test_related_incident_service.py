@@ -267,8 +267,10 @@ async def test_read_failure_degrades_to_unavailable(monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_unimplemented_engine_marks_run_failed(monkeypatch):
+async def test_engine_exception_marks_run_failed(monkeypatch):
     the_repo = the_engine.the_repository
+    monkeypatch.setattr(the_engine.image_embedding_repository, "list_image_inputs", AsyncMock(return_value=[]))
+    monkeypatch.setattr(the_repo, "get_latest_detection_run", AsyncMock(return_value=None))
 
     monkeypatch.setattr(the_repo, "get_report_comparison_facts", AsyncMock(return_value={
         "report_id": 1, "report_reference": "RC-0001",
@@ -276,6 +278,7 @@ async def test_unimplemented_engine_marks_run_failed(monkeypatch):
     }))
     monkeypatch.setattr(the_repo, "begin_detection_run", AsyncMock(return_value=7))
     monkeypatch.setattr(the_repo, "list_candidate_comparison_facts", AsyncMock(return_value=[]))
+    monkeypatch.setattr(the_engine, "match_related_reports", AsyncMock(side_effect=RuntimeError("test failure")))
 
     the_finish = AsyncMock()
     monkeypatch.setattr(the_repo, "finish_detection_run", the_finish)
@@ -299,3 +302,53 @@ async def test_ineligible_report_is_skipped_without_a_run(monkeypatch):
 
     assert the_result is None
     the_begin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_comparison_does_not_load_private_details_if_candidate_not_owned(monkeypatch):
+    owner_check = AsyncMock(side_effect=[{}, AuthorizationError("not yours")])
+    private_read = AsyncMock()
+    monkeypatch.setattr(the_service, "load_owned_case", owner_check)
+    monkeypatch.setattr(the_service.the_repository, "get_comparison_side", private_read)
+    with pytest.raises(AuthorizationError):
+        await the_service.compare_reports(AsyncMock(), "RC-0001", "RC-0002", 42)
+    assert owner_check.await_count == 2
+    private_read.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_claim_race_never_opens_comparison(monkeypatch):
+    from app.core.exceptions import ConflictError
+    monkeypatch.setattr(the_service, "load_owned_case", AsyncMock(return_value={}))
+    monkeypatch.setattr(the_service.the_repository, "get_report_identity", AsyncMock(side_effect=[
+        {"report_id": 1}, {"report_id": 2, "claimed_by_user_id": None},
+    ]))
+    monkeypatch.setattr(the_service.the_repository, "find_candidate_in_latest_run", AsyncMock(return_value={"rule_version": "rid-v1"}))
+    monkeypatch.setattr(the_service, "claim_report_service", AsyncMock(side_effect=ConflictError("claimed already")))
+    compare = AsyncMock()
+    monkeypatch.setattr(the_service, "compare_reports", compare)
+    with pytest.raises(ConflictError):
+        await the_service.claim_and_compare(AsyncMock(), "RC-0001", "RC-0002", 42)
+    compare.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_comparison_passes_authenticated_owner_to_protected_queries(monkeypatch):
+    monkeypatch.setattr(the_service,"load_owned_case",AsyncMock(return_value={}))
+    private_read = AsyncMock(return_value=None)
+    monkeypatch.setattr(the_service.the_repository,"get_comparison_side",private_read)
+    with pytest.raises(NotFoundError):
+        await the_service.compare_reports(AsyncMock(),"RC-0001","RC-0002",42)
+    assert private_read.await_count == 2
+    assert all(call.kwargs["coordinator_id"] == 42 for call in private_read.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_analysis_read_timeout_stays_unavailable_even_if_rollback_fails(monkeypatch):
+    monkeypatch.setattr(the_service, "load_owned_case", AsyncMock(return_value={}))
+    monkeypatch.setattr(the_service, "_build_related_reports", AsyncMock(side_effect=TimeoutError()))
+    db = AsyncMock()
+    db.rollback.side_effect = RuntimeError("connection gone")
+    response = await the_service.get_related_reports(db, "RC-0001", 42)
+    assert response.analysis_state == RelatedAnalysisState.UNAVAILABLE
+    assert response.candidates == []
