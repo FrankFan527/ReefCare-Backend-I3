@@ -1,21 +1,17 @@
 # ---------------------------------------------------------------------------
 # Epic 9 planning repository.
 #
-# Current production data layer:
+# Canonical area/site relationship:
 #
-# planning_area
-#   area_code
-#   area_label
-#   query_latitude
-#   query_longitude
-#   site_count
-#   notes
+#     dive_site.planning_area_code
+#         ->
+#     planning_area.area_code
 #
-# area_daily_conditions
-#   historical raw Open-Meteo values
+# E2 and E9 therefore reuse the same dive_site record.
+# Display labels are never used as relational keys.
 #
-# Historical condition rows are deliberately not used as
-# future forecast values.
+# Historical area_daily_conditions rows remain factual
+# history and are never substituted for live forecast data.
 # ---------------------------------------------------------------------------
 
 from sqlalchemy import text
@@ -71,25 +67,19 @@ async def get_planning_area(
 
 async def list_planning_sites(
     db: AsyncSession,
-    area_label: str,
+    area_code: str,
 ) -> list[dict]:
     """
-    Return ReefCare dive sites configured under one
-    planning-area public label.
+    Return canonical ReefCare dive sites configured under
+    one E9 planning area.
 
-    The current production schema has no explicit FK from
-    dive_site to planning_area.
+    Iteration 3 uses the explicit mapping:
 
-    Until the shared data layer adds that mapping, this
-    query uses an exact match:
-
-        dive_site.public_area_label
+        dive_site.planning_area_code
         =
-        planning_area.area_label
+        planning_area.area_code
 
-    This is intentionally strict. A fuzzy match could hide
-    incorrect reference data and assign a site to the wrong
-    planning area.
+    No site is inferred from public_area_label.
     """
 
     result = await db.execute(
@@ -106,13 +96,15 @@ async def list_planning_sites(
                 ds.default_uncertainty_metres,
 
                 ds.coordinate_source,
-                ds.is_verified
+                ds.is_verified,
+
+                ds.planning_area_code
 
             FROM dive_site AS ds
 
             WHERE
-                ds.public_area_label =
-                    :area_label
+                ds.planning_area_code =
+                    :area_code
 
             ORDER BY
                 ds.name,
@@ -120,8 +112,8 @@ async def list_planning_sites(
             """
         ),
         {
-            "area_label":
-                area_label,
+            "area_code":
+                area_code,
         },
     )
 
@@ -139,8 +131,8 @@ async def get_historical_condition_coverage(
     """
     Return history coverage metadata only.
 
-    This is useful for future provenance/model work but is
-    never used as a substitute for a live forecast.
+    This is useful for provenance/model work but is never
+    used as a substitute for a live forecast.
     """
 
     result = await db.execute(

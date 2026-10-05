@@ -446,9 +446,9 @@ async def compare_travel_dates(
 
     sites = await list_planning_sites(
         db=db,
-        area_label=(
+        area_code=(
             area[
-                "area_label"
+                "area_code"
             ]
         ),
     )
@@ -732,9 +732,9 @@ async def compare_sites_for_date(
 
     sites = await list_planning_sites(
         db=db,
-        area_label=(
+        area_code=(
             area[
-                "area_label"
+                "area_code"
             ]
         ),
     )

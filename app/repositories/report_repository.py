@@ -761,28 +761,60 @@ async def get_report_timeline(
     return result.mappings().all()
 
 
+# ---------------------------------------------------------------------------
+# Iteration 3 — E4 AI suggestion persistence.
+#
+# Smart Report Structuring and Visual Threat Recognition are independent
+# advisory sources.
+#
+# The database uniqueness boundary is:
+#
+#     UNIQUE(report_id, field, source)
+#
+# This allows both AI systems to suggest a value for the same report field
+# without losing provenance.
+# ---------------------------------------------------------------------------
+
+
 async def save_reviewed_ai_suggestions(
     db: AsyncSession,
     report_reference: str,
     suggestions: list,
 ) -> int:
     """
-    Persist what the Observer decided about each AI suggestion (US5.2).
+    Persist the Observer's final decision about each AI
+    suggestion.
 
-    Called inside the submission transaction, after reefcare_submit_report()
-    has returned and before the commit. Both therefore land together: a report
-    cannot exist with its suggestions missing, and suggestions cannot exist
-    without their report.
+    Iteration 3 supports two independent advisory sources:
 
-    The report is resolved by reference inside the INSERT rather than by a
-    separate SELECT, so there is no window between looking the report up and
-    writing against it.
+    - smart_report
+    - visual_recognition
 
-    'removed' entries are stored. They are filtered out on read, because a
-    rejected suggestion describes nothing about the report, but they are a true
-    record of what the model proposed and what the Observer did about it.
+    A report may therefore contain two suggestions for the
+    same field, one from each source.
 
-    The caller commits.
+    The database uniqueness contract is:
+
+        UNIQUE (
+            report_id,
+            field,
+            source
+        )
+
+    This function is called inside the existing report
+    submission transaction after reefcare_submit_report()
+    and before commit.
+
+    Only resolved suggestions should reach this function.
+    The API/service layer rejects unresolved suggestions
+    before persistence, and the database status constraint
+    provides an additional final guard.
+
+    'removed' suggestions are still persisted because they
+    are a truthful record of what the AI proposed and what
+    the Observer chose to reject.
+
+    The caller owns the transaction and commits.
     """
 
     if not suggestions:
@@ -791,29 +823,66 @@ async def save_reviewed_ai_suggestions(
     inserted = 0
 
     for suggestion in suggestions:
-        await db.execute(
+        result = await db.execute(
             text(
                 """
                 INSERT INTO report_ai_suggestion
-                    (report_id, field, suggested_value, status)
+                    (
+                        report_id,
+                        field,
+                        suggested_value,
+                        status,
+                        source,
+                        confidence
+                    )
+
                 SELECT
                     r.report_id,
                     :field,
                     :suggested_value,
-                    :status
+                    :status,
+                    :source,
+                    :confidence
+
                 FROM report AS r
-                WHERE r.report_reference = :report_reference
+
+                WHERE
+                    r.report_reference =
+                        :report_reference
+
+                    AND r.deleted_at IS NULL
+
+                RETURNING
+                    report_ai_suggestion_id
                 """
             ),
             {
-                "report_reference": report_reference,
-                "field": suggestion.field,
-                "suggested_value": suggestion.suggested_value,
-                "status": suggestion.status,
+                "report_reference":
+                    report_reference,
+
+                "field":
+                    suggestion.field,
+
+                "suggested_value":
+                    suggestion.suggested_value,
+
+                "status":
+                    suggestion.status,
+
+                "source":
+                    suggestion.source,
+
+                "confidence":
+                    suggestion.confidence,
             },
         )
 
-        inserted += 1
+        inserted_id = (
+            result.scalar_one_or_none()
+        )
+
+        if inserted_id is not None:
+            inserted += 1
 
     return inserted
 
@@ -823,13 +892,22 @@ async def get_reviewed_ai_suggestions(
     report_reference: str,
 ) -> list:
     """
-    Return the Observer-reviewed suggestions for one report (US5.2).
+    Return Observer-reviewed AI suggestions for one report.
 
-    Only confirmed and corrected entries are returned. A removed suggestion was
-    rejected by the Observer, so presenting it to a Coordinator alongside
-    submitted values would imply it describes the report when it does not.
+    Only confirmed and corrected suggestions are exposed to
+    the Coordinator review projection.
 
-    Ordered by field so the Coordinator sees the same sequence every time.
+    Removed suggestions remain stored for provenance but are
+    deliberately not presented as describing the submitted
+    report.
+
+    Iteration 3 also returns source and confidence so Smart
+    Report Structuring and Visual Recognition can be
+    distinguished after submission.
+
+    Ordering by field and source keeps the response stable
+    when both AI systems suggested a value for the same
+    field.
     """
 
     result = await db.execute(
@@ -837,22 +915,235 @@ async def get_reviewed_ai_suggestions(
             """
             SELECT
                 s.field,
+                s.source,
                 s.suggested_value,
+                s.confidence,
                 s.status
 
             FROM report_ai_suggestion AS s
-            JOIN report AS r ON r.report_id = s.report_id
+
+            JOIN report AS r
+                ON r.report_id =
+                    s.report_id
 
             WHERE
-                r.report_reference = :report_reference
-                AND s.status IN ('confirmed', 'corrected')
+                r.report_reference =
+                    :report_reference
 
-            ORDER BY s.field
+                AND r.deleted_at IS NULL
+
+                AND s.status IN (
+                    'confirmed',
+                    'corrected'
+                )
+
+            ORDER BY
+                s.field,
+                s.source,
+                s.report_ai_suggestion_id
             """
         ),
         {
-            "report_reference": report_reference,
+            "report_reference":
+                report_reference,
         },
     )
 
     return result.mappings().all()
+
+
+# ---------------------------------------------------------------------------
+# Iteration 3 — E6 Observer Impact Feedback.
+#
+# These queries are deliberately read-only.
+#
+# They expose only information that may be projected back
+# to the Observer. They never return:
+#
+# - another Observer's identity
+# - coordinator identity
+# - another report reference
+# - internal incident ids
+# - private evidence
+# - internal relationship notes
+#
+# Ownership is enforced in SQL with report.observer_id.
+# ---------------------------------------------------------------------------
+
+
+async def get_observer_related_incident_event(
+    db: AsyncSession,
+    observer_id: int,
+    report_reference: str,
+) -> dict | None:
+    """
+    Return the latest human-confirmed same-incident event
+    involving one Observer-owned report.
+
+    The related report itself is deliberately not returned.
+
+    US6.2 only needs to tell the Observer that their report
+    was linked to an existing report of the same issue.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                d.decided_at
+                    AS occurred_at
+
+            FROM report AS r
+
+            JOIN report_relationship_decision AS d
+                ON (
+                    d.report_id = r.report_id
+                    OR
+                    d.related_report_id = r.report_id
+                )
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.observer_id =
+                    :observer_id
+
+                AND r.deleted_at
+                    IS NULL
+
+                AND d.decision =
+                    'same_incident'
+
+            ORDER BY
+                d.decided_at DESC,
+                d.report_relationship_decision_id DESC
+
+            LIMIT 1
+            """
+        ),
+        {
+            "observer_id":
+                observer_id,
+
+            "report_reference":
+                report_reference,
+        },
+    )
+
+    row = (
+        result
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        return None
+
+    return dict(row)
+
+
+async def get_observer_contribution(
+    db: AsyncSession,
+    observer_id: int,
+    report_reference: str,
+) -> dict | None:
+    """
+    Return the latest publishable E7 action/follow-up state
+    for one Observer-owned report.
+
+    The projection deliberately excludes:
+    - created_by
+    - responsible_team
+    - internal notes
+    - source_reference
+    - evidence references
+
+    A planned action therefore remains planned, and an
+    action_taken record may be described as completed.
+
+    Only explicitly publishable records may reach E6.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                ca.case_action_id,
+
+                at.code
+                    AS action_type_code,
+
+                at.label
+                    AS action_type_label,
+
+                ca.action_state,
+
+                ca.action_date,
+
+                ca.follow_up_type,
+
+                ca.recording_level,
+
+                ca.recorded_outcome,
+
+                ca.next_follow_up_required,
+
+                ca.next_follow_up_date,
+
+                ca.created_at
+
+            FROM case_action AS ca
+
+            JOIN report AS r
+                ON r.report_id =
+                   ca.report_id
+
+            JOIN action_type AS at
+                ON at.action_type_id =
+                   ca.action_type_id
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.observer_id =
+                    :observer_id
+
+                AND r.deleted_at
+                    IS NULL
+
+                AND ca.is_publishable
+                    IS TRUE
+
+                AND COALESCE(
+                    ca.is_demonstration,
+                    FALSE
+                ) IS FALSE
+
+            ORDER BY
+                ca.created_at DESC,
+                ca.case_action_id DESC
+
+            LIMIT 1
+            """
+        ),
+        {
+            "observer_id":
+                observer_id,
+
+            "report_reference":
+                report_reference,
+        },
+    )
+
+    row = (
+        result
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        return None
+
+    return dict(row)

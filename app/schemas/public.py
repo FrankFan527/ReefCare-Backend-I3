@@ -3,6 +3,41 @@ from datetime import date
 from app.schemas.common import APIModel
 
 
+class PublicDiveSiteResponse(APIModel):
+    """
+    Public E2 projection for one named dive site.
+
+    planning_area_code links this canonical dive_site row
+    into E9. No duplicate E9 site identity is introduced.
+    """
+
+    dive_site_id: int
+
+    name: str
+
+    public_area_label: str
+
+    region: str | None = None
+
+    centre_latitude: (
+        float | None
+    ) = None
+
+    centre_longitude: (
+        float | None
+    ) = None
+
+    default_uncertainty_metres: (
+        int | None
+    ) = None
+
+    planning_available: bool
+
+    planning_area_code: (
+        str | None
+    ) = None
+
+
 class PublicActivityItem(APIModel):
     """
     One explicitly public-safe ReefCare activity item.
@@ -44,30 +79,27 @@ class PublicReportHandoffResponse(APIModel):
     The backend validates that the selected site exists
     and returns the canonical site id.
 
-    Browser login/registration navigation is frontend
-    state, but this contract gives the frontend a stable
-    canonical value to preserve through authentication.
+    This contract remains specifically E2 -> E4 reporting.
+    E2 -> E9 planning information belongs to
+    PublicDiveSiteResponse.
     """
 
     selected_dive_site_id: int
     selected_dive_site_name: str
     public_area_label: str
 
-    # Published site centre, so the public map plots the real position rather
-    # than a hardcoded one. Nullable because a site added later may not have
-    # been sourced yet, and an absent coordinate is a truthful answer rather
-    # than a gap to fill.
     centre_latitude: float | None = None
     centre_longitude: float | None = None
 
-    # Returned with the coordinate and never without it. This is the radius a
-    # dive-site-only report actually covers, and a pin drawn without it claims
-    # a precision nobody supplied.
-    default_uncertainty_metres: int | None = None
+    default_uncertainty_metres: (
+        int | None
+    ) = None
 
     requires_authentication: bool = True
 
-    reporting_path: str = "/reports/new"
+    reporting_path: str = (
+        "/report-a-reef"
+    )
 
     message: str = (
         "Sign in or create an Observer account to continue "

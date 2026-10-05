@@ -126,6 +126,39 @@ class Settings(BaseSettings):
         le=3600,
     )
 
+    # -----------------------------------------------------------------
+    # Epic 8 selected external context (US8.3).
+    #
+    # NOAA Coral Reef Watch CRW v3.1 via ERDDAP griddap. Public domain,
+    # free to use, attribution required and carried in the
+    # external_context_source table.
+    # -----------------------------------------------------------------
+
+    external_context_enabled: bool = True
+
+    # Tried in order until one answers. Both serve the same CRW v3.1
+    # product under the same variable names. PacIOOS (Hawaii) is the
+    # upstream publisher and is reachable from Malaysia; the NOAA
+    # CoastWatch West Coast mirror was not, in testing on 2026-10-05.
+    noaa_crw_base_urls: str = (
+        "https://pae-paha.pacioos.hawaii.edu/erddap/griddap/dhw_5km.csv,"
+        "https://coastwatch.pfeg.noaa.gov/erddap/griddap/NOAA_DHW.csv"
+    )
+
+    # per mirror; with two mirrors the worst case is twice this
+    noaa_crw_timeout_seconds: float = Field(
+        default=6.0,
+        gt=0,
+        le=30,
+    )
+
+    # how old a stored value may be before a read tries to refresh it
+    external_context_staleness_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+    )
+
     # -----------------------------------------------------------------------
     # Epic 9 Reef-Aware Dive Planning.
     #

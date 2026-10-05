@@ -7,21 +7,15 @@ async def get_public_site(
     dive_site_id: int,
 ):
     """
-    Return the general public-safe identity of one dive site.
+    Return the public-safe identity of one named dive site.
 
-    Centre coordinates are included. They were excluded when this was written
-    because every row held NULL, so exposing them would have offered a field
-    that was never populated.
+    The published site centre is reference data rather than
+    a report's precise observation location.
 
-    A dive site centre is published reference data, the position of a named
-    site that appears on any operator's listing. It is not a report location,
-    which stays behind reefcare_report_location(). Returning it does not
-    weaken the location privacy model.
-
-    default_uncertainty_metres travels with the coordinate rather than being
-    optional. A dive-site-only report is represented at the site centre with
-    that radius, and a coordinate served without its radius invites a map pin
-    claiming a precision nobody supplied.
+    planning_area_code is the canonical E2 -> E9 mapping.
+    A null value means ReefCare planning is not currently
+    configured for this site. No area is guessed from
+    labels or neighbouring sites.
     """
 
     result = await db.execute(
@@ -35,17 +29,21 @@ async def get_public_site(
 
                 centre_latitude,
                 centre_longitude,
-                default_uncertainty_metres
+                default_uncertainty_metres,
+
+                planning_area_code
 
             FROM dive_site
 
-            WHERE dive_site_id = :dive_site_id
+            WHERE
+                dive_site_id = :dive_site_id
 
             LIMIT 1
             """
         ),
         {
-            "dive_site_id": dive_site_id,
+            "dive_site_id":
+                dive_site_id,
         },
     )
 
@@ -61,6 +59,11 @@ async def list_public_site_activity(
     activity.
 
     Private reports are deliberately not queried here.
+
+    Iteration 3 note:
+    E2 US2.4 will later consume the shared E8 public-safe
+    site-context boundary. Until that E8 service is ready,
+    this existing I2 projection remains unchanged.
     """
 
     result = await db.execute(
@@ -87,7 +90,8 @@ async def list_public_site_activity(
             """
         ),
         {
-            "dive_site_id": dive_site_id,
+            "dive_site_id":
+                dive_site_id,
         },
     )
 
