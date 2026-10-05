@@ -1,5 +1,5 @@
-[project.scripts]
-app = "app.main:app"
+[tool.vercel]
+entrypoint = "app.main:app"
 
 [tool.vercel.scripts]
 build = "python scripts/prepare_related_incident_image_model.py"
