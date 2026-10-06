@@ -10,8 +10,8 @@ from unittest.mock import (
 import pytest
 
 from app.core.exceptions import (
-    DomainValidationError,
     NotFoundError,
+    RequestValidationError,
 )
 from app.services import (
     plan_service as service,
@@ -60,9 +60,9 @@ async def test_unknown_area_is_rejected(
     )
 
     with pytest.raises(
-        DomainValidationError,
+        RequestValidationError,
         match="Unknown planning area",
-    ):
+    ) as error:
         await service.validate_plan_reference_data(
             db=object(),
             area_code="invalid",
@@ -70,6 +70,16 @@ async def test_unknown_area_is_rejected(
                 21,
             ],
         )
+
+    assert (
+        error.value.status_code
+        == 422
+    )
+
+    assert (
+        error.value.error_code
+        == "validation_error"
+    )
 
 
 @pytest.mark.asyncio
@@ -107,9 +117,9 @@ async def test_unknown_site_is_rejected(
     )
 
     with pytest.raises(
-        DomainValidationError,
+        RequestValidationError,
         match="Unknown dive site",
-    ):
+    ) as error:
         await service.validate_plan_reference_data(
             db=object(),
             area_code="redang",
@@ -118,6 +128,16 @@ async def test_unknown_site_is_rejected(
                 99,
             ],
         )
+
+    assert (
+        error.value.status_code
+        == 422
+    )
+
+    assert (
+        error.value.error_code
+        == "validation_error"
+    )
 
 
 @pytest.mark.asyncio
@@ -155,9 +175,9 @@ async def test_site_from_another_area_is_rejected(
     )
 
     with pytest.raises(
-        DomainValidationError,
+        RequestValidationError,
         match="do not belong",
-    ):
+    ) as error:
         await service.validate_plan_reference_data(
             db=object(),
             area_code="redang",
@@ -165,6 +185,16 @@ async def test_site_from_another_area_is_rejected(
                 21,
             ],
         )
+
+    assert (
+        error.value.status_code
+        == 422
+    )
+
+    assert (
+        error.value.error_code
+        == "validation_error"
+    )
 
 
 @pytest.mark.asyncio
@@ -365,7 +395,10 @@ async def test_create_uses_authenticated_observer_and_commits(
 
     db.commit.assert_awaited_once()
 
-    assert result.plan_id == 12
+    assert (
+        result.plan_id
+        == 12
+    )
 
 
 @pytest.mark.asyncio

@@ -164,8 +164,47 @@ class WorkflowStateError(
 class DomainValidationError(
     ServiceError
 ):
+    """
+    Existing domain/business validation contract.
+
+    This remains HTTP 400 because E5, E7 and other existing
+    backend workflows already depend on that behaviour.
+    """
+
     status_code = (
         status.HTTP_400_BAD_REQUEST
+    )
+
+    error_code = (
+        "validation_error"
+    )
+
+    default_message = (
+        "Invalid request"
+    )
+
+
+class RequestValidationError(
+    ServiceError
+):
+    """
+    Request input is structurally valid but semantically
+    invalid for an endpoint whose API contract requires
+    HTTP 422.
+
+    Iteration 3 E9 uses this error for planning and saved
+    plan input validation.
+
+    It intentionally keeps the same public error code as
+    DomainValidationError while changing only the HTTP
+    status code.
+
+    This avoids changing the existing E5/E7 HTTP 400
+    contract.
+    """
+
+    status_code = (
+        status.HTTP_422_UNPROCESSABLE_CONTENT
     )
 
     error_code = (

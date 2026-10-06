@@ -13,8 +13,8 @@ from app.core.enums import (
     SeasonalState,
 )
 from app.core.exceptions import (
-    DomainValidationError,
     NotFoundError,
+    RequestValidationError,
 )
 from app.services import (
     planning_service as service,
@@ -31,6 +31,7 @@ FIXED_TODAY = date(
     10,
     3,
 )
+
 
 RETRIEVED_AT = datetime.fromisoformat(
     "2026-10-03T08:00:00+08:00"
@@ -175,9 +176,9 @@ async def test_date_comparison_rejects_inverted_window(
     )
 
     with pytest.raises(
-        DomainValidationError,
+        RequestValidationError,
         match="from must be on or before to",
-    ):
+    ) as error:
         await service.compare_travel_dates(
             db=object(),
             area_code="redang",
@@ -193,6 +194,16 @@ async def test_date_comparison_rejects_inverted_window(
             ),
         )
 
+    assert (
+        error.value.status_code
+        == 422
+    )
+
+    assert (
+        error.value.error_code
+        == "validation_error"
+    )
+
 
 @pytest.mark.asyncio
 async def test_date_comparison_rejects_more_than_fourteen_days(
@@ -207,9 +218,9 @@ async def test_date_comparison_rejects_more_than_fourteen_days(
     )
 
     with pytest.raises(
-        DomainValidationError,
+        RequestValidationError,
         match="cannot exceed 14 days",
-    ):
+    ) as error:
         await service.compare_travel_dates(
             db=object(),
             area_code="redang",
@@ -224,6 +235,16 @@ async def test_date_comparison_rejects_more_than_fourteen_days(
                 15,
             ),
         )
+
+    assert (
+        error.value.status_code
+        == 422
+    )
+
+    assert (
+        error.value.error_code
+        == "validation_error"
+    )
 
 
 @pytest.mark.asyncio

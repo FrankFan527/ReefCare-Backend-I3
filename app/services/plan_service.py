@@ -19,8 +19,8 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.exceptions import (
     DatabaseOperationError,
-    DomainValidationError,
     NotFoundError,
+    RequestValidationError,
 )
 from app.repositories import (
     plan_repository,
@@ -49,6 +49,10 @@ async def validate_plan_reference_data(
         planning_area.area_label
         =
         dive_site.public_area_label
+
+    Invalid client-supplied planning references use the E9
+    HTTP 422 validation contract rather than the existing
+    global DomainValidationError -> HTTP 400 behaviour.
     """
 
     area = (
@@ -60,7 +64,7 @@ async def validate_plan_reference_data(
     )
 
     if area is None:
-        raise DomainValidationError(
+        raise RequestValidationError(
             f"Unknown planning area: {area_code}"
         )
 
@@ -89,7 +93,7 @@ async def validate_plan_reference_data(
             if site_id not in returned_ids
         ]
 
-        raise DomainValidationError(
+        raise RequestValidationError(
             "Unknown dive site id(s): "
             + ", ".join(
                 str(site_id)
@@ -118,7 +122,7 @@ async def validate_plan_reference_data(
     ]
 
     if invalid_sites:
-        raise DomainValidationError(
+        raise RequestValidationError(
             "Selected dive site(s) do not belong "
             f"to planning area {area_code}: "
             + ", ".join(
