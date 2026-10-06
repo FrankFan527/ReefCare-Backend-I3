@@ -35,8 +35,8 @@ from app.core.enums import (
     SeasonalState,
 )
 from app.core.exceptions import (
-    DomainValidationError,
     NotFoundError,
+    RequestValidationError,
 )
 from app.repositories.planning_repository import (
     get_planning_area,
@@ -419,6 +419,9 @@ async def compare_travel_dates(
 
     Dates outside ReefCare's live forecast horizon remain
     in the response and are marked OUT_OF_HORIZON.
+
+    Structurally valid but semantically invalid date-window
+    input uses the E9 HTTP 422 validation contract.
     """
 
     area = await load_area_or_fail(
@@ -427,7 +430,7 @@ async def compare_travel_dates(
     )
 
     if from_date > to_date:
-        raise DomainValidationError(
+        raise RequestValidationError(
             "from must be on or before to"
         )
 
@@ -439,7 +442,7 @@ async def compare_travel_dates(
         window_days
         > MAX_TRAVEL_WINDOW_DAYS
     ):
-        raise DomainValidationError(
+        raise RequestValidationError(
             "The planning date window "
             "cannot exceed 14 days"
         )
