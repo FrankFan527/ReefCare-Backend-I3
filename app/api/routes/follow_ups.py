@@ -49,9 +49,15 @@ async def get_follow_ups(
     report_reference: str,
     current_coordinator: CurrentCoordinator,
     db: DatabaseSession,
-    include_superseded: bool = Query(
-        default=False,
+    include_superseded: bool | None = Query(
+        default=None,
+        alias="includeSuperseded",
         description="Include records replaced by a later correction.",
+    ),
+    legacy_include_superseded: bool = Query(
+        default=False,
+        alias="include_superseded",
+        include_in_schema=False,
     ),
 ):
     """
@@ -63,7 +69,11 @@ async def get_follow_ups(
         db=db,
         report_reference=report_reference,
         coordinator_id=current_coordinator["user_id"],
-        include_superseded=include_superseded,
+        include_superseded=(
+            include_superseded
+            if include_superseded is not None
+            else legacy_include_superseded
+        ),
     )
 
 
