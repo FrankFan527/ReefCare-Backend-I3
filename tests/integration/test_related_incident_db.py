@@ -330,3 +330,160 @@ async def test_five_incident_membership_cases(the_session, case, minimum_reports
         assert after == before
     else:
         assert len(after["decisions"]) == len(before["decisions"]) + 1
+
+
+@pytest.mark.asyncio
+async def test_related_candidate_is_visible_from_both_directions(
+    the_session,
+    monkeypatch,
+):
+    """
+    R1 is submitted/analyzed first and has no match.
+
+    R2 is analyzed later and finds:
+        R2 -> R1
+
+    Coordinator opening R1 must still see R2,
+    and Claim & Compare from R1 must succeed.
+    """
+
+    the_rows = await find_fixture_rows(
+        the_session,
+        minimum_reports=2,
+    )
+
+    the_coordinator_id = (
+        the_rows["coordinator_id"]
+    )
+
+    the_r1 = the_rows["reports"][0]
+    the_r2 = the_rows["reports"][1]
+
+    the_r1_ref = (
+        the_r1["report_reference"]
+    )
+
+    the_r2_ref = (
+        the_r2["report_reference"]
+    )
+
+    # Coordinator claims the older report first.
+    await claim_report(
+        the_session,
+        the_r1_ref,
+        the_coordinator_id,
+    )
+
+    async def the_fake_matcher(
+        the_source,
+        the_pool,
+        rules=None,
+    ):
+        if (
+            the_source.report_id
+            == the_r1["report_id"]
+        ):
+            # R2 does not exist as a match
+            # from R1's historical analysis.
+            return DetectionOutcome(
+                DetectionRunState.COMPLETED,
+                [],
+            )
+
+        # Later R2 detects R1.
+        return DetectionOutcome(
+            DetectionRunState.COMPLETED,
+            [
+                CandidateMatch(
+                    candidate_report_id=(
+                        the_r1["report_id"]
+                    ),
+                    relatedness_level=(
+                        RelatednessLevel.HIGH
+                    ),
+                    signals=[
+                        CandidateSignal(
+                            "same_dive_site"
+                        )
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        the_engine,
+        "match_related_reports",
+        the_fake_matcher,
+    )
+
+    # Older R1: no candidate.
+    assert (
+        await the_engine
+        .run_related_incident_detection(
+            the_session,
+            the_r1_ref,
+            force=True,
+            generate_embeddings=False,
+        )
+        == DetectionRunState.COMPLETED
+    )
+
+    # Newer R2: detects R1.
+    assert (
+        await the_engine
+        .run_related_incident_detection(
+            the_session,
+            the_r2_ref,
+            force=True,
+            generate_embeddings=False,
+        )
+        == DetectionRunState.COMPLETED
+    )
+
+    # Opening R1 must now discover the reverse
+    # R2 -> R1 candidate.
+    the_list = (
+        await the_service
+        .get_related_reports(
+            the_session,
+            the_r1_ref,
+            the_coordinator_id,
+        )
+    )
+
+    assert (
+        the_list.analysis_state
+        == RelatedAnalysisState.MATCHES_AVAILABLE
+    )
+
+    assert [
+        the_candidate
+        .candidate_report_reference
+        for the_candidate
+        in the_list.candidates
+    ] == [the_r2_ref]
+
+    # Most importantly, this must no longer 404.
+    the_comparison = (
+        await the_service.claim_and_compare(
+            the_session,
+            the_r1_ref,
+            the_r2_ref,
+            the_coordinator_id,
+        )
+    )
+
+    assert (
+        the_comparison.current.report_reference
+        == the_r1_ref
+    )
+
+    assert (
+        the_comparison.candidate.report_reference
+        == the_r2_ref
+    )
+
+    assert (
+        the_comparison.relatedness_level
+        == RelatednessLevel.HIGH
+    )
