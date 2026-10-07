@@ -128,32 +128,144 @@ def _signal(code: str, score: float, weight: float, detail: str | None = None) -
     return CandidateSignal(code, detail, Decimal(str(round(score, 4))), Decimal(str(weight)))
 
 
-def _spatial_match(source: ReportComparisonFacts, candidate: ReportComparisonFacts, rules: MatchingRules):
+def _spatial_match(
+    source: ReportComparisonFacts,
+    candidate: ReportComparisonFacts,
+    rules: MatchingRules,
+):
     signals = []
-    same_site = source.dive_site_id is not None and source.dive_site_id == candidate.dive_site_id
+
+    same_site = (
+        source.dive_site_id is not None
+        and source.dive_site_id == candidate.dive_site_id
+    )
+
     area = _label(source.public_area_label)
-    same_area = area is not None and area == _label(candidate.public_area_label)
-    source_point, candidate_point = _point(source), _point(candidate)
-    nearby = precise_enough = False
-    if source_point is not None and candidate_point is not None:
-        distance = _distance_metres(source_point, candidate_point)
-        uncertainty = (CONFIDENCE_UNCERTAINTY[source.location_confidence_code]
-                       + CONFIDENCE_UNCERTAINTY[candidate.location_confidence_code])
-        if distance > rules.nearby_metres + uncertainty + 160:
-            return None
-        nearby = distance <= rules.nearby_metres
-        precise_enough = uncertainty <= 200
-    strong = same_site or (nearby and precise_enough)
-    if not (same_site or same_area or nearby):
+    same_area = (
+        area is not None
+        and area == _label(candidate.public_area_label)
+    )
+
+    source_point = _point(source)
+    candidate_point = _point(candidate)
+
+    nearby = False
+    precise_enough = False
+
+    if (
+        source_point is not None
+        and candidate_point is not None
+    ):
+        distance = _distance_metres(
+            source_point,
+            candidate_point,
+        )
+
+        uncertainty = (
+            CONFIDENCE_UNCERTAINTY[
+                source.location_confidence_code
+            ]
+            + CONFIDENCE_UNCERTAINTY[
+                candidate.location_confidence_code
+            ]
+        )
+
+        nearby = (
+            distance <= rules.nearby_metres
+        )
+
+        precise_enough = (
+            uncertainty <= 200
+        )
+
+        allowed_distance = (
+            rules.nearby_metres
+            + uncertainty
+            + 160
+        )
+
+        # Confident coordinates that strongly contradict each other
+        # override a shared site name.
+        #
+        # Imprecise coordinates (for example two within_1km pins)
+        # must not eliminate a same-site pair before the remaining
+        # signals, including image similarity, are evaluated.
+        if distance > allowed_distance:
+            if (
+                not same_site
+                or precise_enough
+            ):
+                return None
+
+    strong = (
+        same_site
+        or (
+            nearby
+            and precise_enough
+        )
+    )
+
+    if not (
+        same_site
+        or same_area
+        or nearby
+    ):
         return None
-    primary = "same_dive_site" if same_site else "nearby_location" if nearby and precise_enough else "same_general_area" if same_area else "nearby_location"
-    signals.append(_signal(primary, 1.0 if strong else 0.5, 0.30,
-                           "Generalised locations; observer uncertainty applies." if primary == "nearby_location" else None))
-    # Supporting spatial explanations do not receive another spatial weight.
-    if nearby and primary != "nearby_location":
-        signals.append(_signal("nearby_location", 1.0, 0.0, "Nearby generalised locations; observer uncertainty applies."))
-    if same_area and not same_site and primary != "same_general_area":
-        signals.append(_signal("same_general_area", 1.0, 0.0))
+
+    if same_site:
+        primary = "same_dive_site"
+    elif nearby and precise_enough:
+        primary = "nearby_location"
+    elif same_area:
+        primary = "same_general_area"
+    else:
+        primary = "nearby_location"
+
+    signals.append(
+        _signal(
+            primary,
+            1.0 if strong else 0.5,
+            0.30,
+            (
+                "Generalised locations; "
+                "observer uncertainty applies."
+                if primary == "nearby_location"
+                else None
+            ),
+        )
+    )
+
+    # Supporting spatial explanations do not receive
+    # another spatial weight.
+    if (
+        nearby
+        and primary != "nearby_location"
+    ):
+        signals.append(
+            _signal(
+                "nearby_location",
+                1.0,
+                0.0,
+                (
+                    "Nearby generalised locations; "
+                    "observer uncertainty applies."
+                ),
+            )
+        )
+
+    if (
+        same_area
+        and not same_site
+        and primary != "same_general_area"
+    ):
+        signals.append(
+            _signal(
+                "same_general_area",
+                1.0,
+                0.0,
+            )
+        )
+
     return signals, strong
 
 

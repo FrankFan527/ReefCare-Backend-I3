@@ -460,6 +460,118 @@ async def list_run_candidates(
     return [dict(the_row) for the_row in the_result.mappings().all()]
 
 
+async def list_reverse_candidates_from_latest_runs(
+    db: AsyncSession,
+    report_id: int,
+) -> list[dict]:
+    """
+    Suggestions produced by OTHER reports' latest runs where report_id
+    was stored as the candidate.
+
+    From the current report's point of view, the source report becomes the
+    candidate.
+
+    Only each source report's latest run is considered, so a stale reverse
+    suggestion from an older run is not revived after a newer run removes it.
+    """
+
+    the_result = await db.execute(
+        text(
+            """
+            WITH latest_other_run AS (
+                SELECT DISTINCT ON (rr.report_id)
+                       rr.report_id AS source_report_id,
+                       rr.related_incident_run_id,
+                       rr.run_state,
+                       rr.started_at
+                FROM related_incident_run AS rr
+                WHERE rr.report_id <> :report_id
+                ORDER BY
+                    rr.report_id,
+                    rr.started_at DESC,
+                    rr.related_incident_run_id DESC
+            )
+            SELECT
+                c.related_incident_candidate_id,
+                lr.source_report_id AS candidate_report_id,
+                r.report_reference AS candidate_report_reference,
+                r.claimed_by_user_id AS candidate_claimed_by_user_id,
+                r.incident_id AS candidate_incident_id,
+                c.relatedness_level,
+                c.similarity_score
+            FROM latest_other_run AS lr
+            JOIN related_incident_candidate AS c
+              ON c.related_incident_run_id = lr.related_incident_run_id
+            JOIN report AS r
+              ON r.report_id = lr.source_report_id
+            WHERE lr.run_state = 'completed'
+              AND c.candidate_report_id = :report_id
+              AND r.deleted_at IS NULL
+            ORDER BY
+                CASE c.relatedness_level
+                    WHEN 'high' THEN 1
+                    WHEN 'medium' THEN 2
+                    ELSE 3
+                END,
+                c.similarity_score DESC NULLS LAST,
+                c.related_incident_candidate_id
+            """
+        ),
+        {"report_id": report_id},
+    )
+
+    return [
+        dict(the_row)
+        for the_row in the_result.mappings().all()
+    ]
+
+
+async def list_candidate_signals_by_ids(
+    db: AsyncSession,
+    candidate_ids: list[int],
+) -> list[dict]:
+    """
+    Return signals for candidate rows that may belong to different
+    detection runs.
+    """
+
+    if not candidate_ids:
+        return []
+
+    the_result = await db.execute(
+        text(
+            """
+            SELECT
+                cs.related_incident_candidate_id,
+                s.code,
+                s.label,
+                cs.signal_detail AS detail,
+                cs.signal_score,
+                cs.signal_weight
+            FROM related_incident_candidate_signal AS cs
+            JOIN similarity_signal AS s
+              ON s.similarity_signal_id = cs.similarity_signal_id
+            WHERE cs.related_incident_candidate_id IN :candidate_ids
+            ORDER BY
+                cs.related_incident_candidate_id,
+                s.display_order,
+                s.code
+            """
+        ).bindparams(
+            bindparam(
+                "candidate_ids",
+                expanding=True,
+            )
+        ),
+        {"candidate_ids": candidate_ids},
+    )
+
+    return [
+        dict(the_row)
+        for the_row in the_result.mappings().all()
+    ]
+
+
 async def list_run_candidate_signals(
     db: AsyncSession,
     run_id: int,

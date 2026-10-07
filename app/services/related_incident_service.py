@@ -335,101 +335,324 @@ async def _build_actionable_candidates(
     coordinator_id: int,
 ) -> list[RelatedReportCandidate]:
     """
-    Apply AC4 (unclaimed or owned by you only), attach signals, and work out
-    the decision state of every remaining pair.
+    Apply AC4 (Unclaimed or Owned by you only), attach signals and determine
+    the decision state.
+
+    A relationship suggestion is treated symmetrically:
+
+        current -> other
+
+    or:
+
+        other -> current
+
+    may make the other report visible.
+
+    If the pair exists in both directions, prefer the current report's own
+    run so existing report-local provenance remains stable.
     """
 
-    the_run_id = the_run["related_incident_run_id"]
+    the_run_id = the_run[
+        "related_incident_run_id"
+    ]
 
-    the_rows = await the_repository.list_run_candidates(db=db, run_id=the_run_id)
+    # Normal direction:
+    #
+    # current report
+    #     -> candidate
+    #
+    the_rows = (
+        await the_repository.list_run_candidates(
+            db=db,
+            run_id=the_run_id,
+        )
+    )
 
-    the_visible_rows: list[tuple[dict, CandidateOwnershipState]] = []
+    # Reverse direction:
+    #
+    # newer/other report
+    #     -> current report
+    #
+    the_reverse_rows = (
+        await the_repository
+        .list_reverse_candidates_from_latest_runs(
+            db=db,
+            report_id=the_current["report_id"],
+        )
+    )
+
+    # A pair can theoretically exist in both directions.
+    # Prefer the row from the current report's own run.
+    the_seen_report_ids = {
+        the_row["candidate_report_id"]
+        for the_row in the_rows
+    }
+
+    for the_row in the_reverse_rows:
+        the_candidate_id = (
+            the_row["candidate_report_id"]
+        )
+
+        if (
+            the_candidate_id
+            not in the_seen_report_ids
+        ):
+            the_rows.append(the_row)
+            the_seen_report_ids.add(
+                the_candidate_id
+            )
+
+    # AC4: expose only Unclaimed or Owned by you.
+    the_visible_rows: list[
+        tuple[
+            dict,
+            CandidateOwnershipState,
+        ]
+    ] = []
 
     for the_row in the_rows:
         the_ownership = derive_ownership_state(
-            the_candidate_owner_id=the_row["candidate_claimed_by_user_id"],
+            the_candidate_owner_id=(
+                the_row[
+                    "candidate_claimed_by_user_id"
+                ]
+            ),
             the_coordinator_id=coordinator_id,
         )
 
-        # owned by another Coordinator: outside the I3 workflow (AC4)
         if the_ownership is not None:
-            the_visible_rows.append((the_row, the_ownership))
+            the_visible_rows.append(
+                (
+                    the_row,
+                    the_ownership,
+                )
+            )
 
     if not the_visible_rows:
         return []
 
-    the_signal_rows = await the_repository.list_run_candidate_signals(
-        db=db,
-        run_id=the_run_id,
+    # After merging the two directions, restore the
+    # normal High -> Medium -> Low ordering.
+    the_level_order = {
+        "high": 1,
+        "medium": 2,
+        "low": 3,
+    }
+
+    def the_candidate_sort_key(
+        the_item: tuple[
+            dict,
+            CandidateOwnershipState,
+        ],
+    ):
+        the_row, _ = the_item
+
+        the_score = the_row.get(
+            "similarity_score"
+        )
+
+        return (
+            the_level_order.get(
+                the_row[
+                    "relatedness_level"
+                ],
+                99,
+            ),
+            -(
+                float(the_score)
+                if the_score is not None
+                else -1.0
+            ),
+            the_row[
+                "candidate_report_id"
+            ],
+        )
+
+    the_visible_rows.sort(
+        key=the_candidate_sort_key
     )
 
-    the_signals_by_candidate: dict[int, list[RelatedReportSignal]] = {}
+    # Candidate rows can now come from different runs,
+    # so querying signals by one run_id is no longer enough.
+    the_signal_rows = (
+        await the_repository
+        .list_candidate_signals_by_ids(
+            db=db,
+            candidate_ids=[
+                the_row[
+                    "related_incident_candidate_id"
+                ]
+                for the_row, _
+                in the_visible_rows
+            ],
+        )
+    )
+
+    the_signals_by_candidate: dict[
+        int,
+        list[RelatedReportSignal],
+    ] = {}
 
     for the_signal in the_signal_rows:
         the_signals_by_candidate.setdefault(
-            the_signal["related_incident_candidate_id"], []
+            the_signal[
+                "related_incident_candidate_id"
+            ],
+            [],
         ).append(
             RelatedReportSignal(
                 code=the_signal["code"],
                 label=the_signal["label"],
                 detail=the_signal["detail"],
-                signal_score=the_signal.get("signal_score"),
-                signal_weight=the_signal.get("signal_weight"),
+                signal_score=(
+                    the_signal.get(
+                        "signal_score"
+                    )
+                ),
+                signal_weight=(
+                    the_signal.get(
+                        "signal_weight"
+                    )
+                ),
             )
         )
 
-    the_other_ids = [the_row["candidate_report_id"] for the_row, _ in the_visible_rows]
+    the_other_ids = [
+        the_row["candidate_report_id"]
+        for the_row, _
+        in the_visible_rows
+    ]
 
-    the_decisions = await the_repository.list_latest_pair_decisions(
-        db=db,
-        report_id=the_current["report_id"],
-        other_report_ids=the_other_ids,
+    # Decisions are already symmetric through
+    # pair_low_report_id / pair_high_report_id.
+    the_decisions = (
+        await the_repository
+        .list_latest_pair_decisions(
+            db=db,
+            report_id=(
+                the_current[
+                    "report_id"
+                ]
+            ),
+            other_report_ids=(
+                the_other_ids
+            ),
+        )
     )
 
-    the_decision_by_other = {d["other_report_id"]: d for d in the_decisions}
+    the_decision_by_other = {
+        the_decision["other_report_id"]:
+            the_decision
+        for the_decision
+        in the_decisions
+    }
 
-    the_evidence_times = await the_repository.get_latest_evidence_times(
-        db=db,
-        report_ids=[the_current["report_id"], *the_other_ids],
+    the_evidence_times = (
+        await the_repository
+        .get_latest_evidence_times(
+            db=db,
+            report_ids=[
+                the_current["report_id"],
+                *the_other_ids,
+            ],
+        )
     )
 
-    the_current_evidence_at = the_evidence_times.get(the_current["report_id"])
+    the_current_evidence_at = (
+        the_evidence_times.get(
+            the_current["report_id"]
+        )
+    )
 
-    the_candidates: list[RelatedReportCandidate] = []
+    the_candidates: list[
+        RelatedReportCandidate
+    ] = []
 
-    for the_row, the_ownership in the_visible_rows:
-        the_candidate_id = the_row["candidate_report_id"]
+    for (
+        the_row,
+        the_ownership,
+    ) in the_visible_rows:
 
-        # new evidence on EITHER report can justify reconsideration (AC7)
+        the_candidate_id = (
+            the_row[
+                "candidate_report_id"
+            ]
+        )
+
+        # AC7: evidence on either side can
+        # reopen a Not Related relationship.
         the_pair_latest_evidence = max(
             (
-                t for t in (
+                the_time
+                for the_time in (
                     the_current_evidence_at,
-                    the_evidence_times.get(the_candidate_id),
+                    the_evidence_times.get(
+                        the_candidate_id
+                    ),
                 )
-                if t is not None
+                if the_time is not None
             ),
             default=None,
         )
 
-        the_decision_state, the_reopened = derive_decision_state(
-            the_current_incident_id=the_current["incident_id"],
-            the_candidate_incident_id=the_row["candidate_incident_id"],
-            the_latest_decision=the_decision_by_other.get(the_candidate_id),
-            the_latest_evidence_at=the_pair_latest_evidence,
+        (
+            the_decision_state,
+            the_reopened,
+        ) = derive_decision_state(
+            the_current_incident_id=(
+                the_current[
+                    "incident_id"
+                ]
+            ),
+            the_candidate_incident_id=(
+                the_row[
+                    "candidate_incident_id"
+                ]
+            ),
+            the_latest_decision=(
+                the_decision_by_other.get(
+                    the_candidate_id
+                )
+            ),
+            the_latest_evidence_at=(
+                the_pair_latest_evidence
+            ),
         )
 
         the_candidates.append(
             RelatedReportCandidate(
-                candidate_report_reference=the_row["candidate_report_reference"],
-                relatedness_level=the_row["relatedness_level"],
-                relatedness_score=the_row.get("similarity_score"),
-                signals=the_signals_by_candidate.get(
-                    the_row["related_incident_candidate_id"], []
+                candidate_report_reference=(
+                    the_row[
+                        "candidate_report_reference"
+                    ]
                 ),
-                ownership_state=the_ownership,
-                decision_state=the_decision_state,
-                reopened_by_new_evidence=the_reopened,
+                relatedness_level=(
+                    the_row[
+                        "relatedness_level"
+                    ]
+                ),
+                relatedness_score=(
+                    the_row.get(
+                        "similarity_score"
+                    )
+                ),
+                signals=(
+                    the_signals_by_candidate.get(
+                        the_row[
+                            "related_incident_candidate_id"
+                        ],
+                        [],
+                    )
+                ),
+                ownership_state=(
+                    the_ownership
+                ),
+                decision_state=(
+                    the_decision_state
+                ),
+                reopened_by_new_evidence=(
+                    the_reopened
+                ),
             )
         )
 
@@ -453,8 +676,9 @@ async def claim_and_compare(
     ownership service, so the race is decided by PostgreSQL. Losing the race
     returns 409 and the candidate drops out of this Coordinator's list.
 
-    Only a candidate that the latest analysis actually suggested can be
-    claimed from here; the normal queue remains the route for anything else.
+    Only a pair suggested by the latest completed analysis on either report
+    can be claimed from here; the normal queue remains the route for anything
+    else.
     """
 
     await load_owned_case(
@@ -469,10 +693,16 @@ async def claim_and_compare(
     if the_current is None or the_candidate is None:
         raise NotFoundError("Report not found")
 
-    the_suggestion = await the_repository.find_candidate_in_latest_run(
-        db=db,
-        report_id=the_current["report_id"],
-        candidate_report_id=the_candidate["report_id"],
+    the_suggestion = (
+        await _find_suggestion_either_direction(
+            db=db,
+            the_first_report_id=(
+                the_current["report_id"]
+            ),
+            the_second_report_id=(
+                the_candidate["report_id"]
+            ),
+        )
     )
 
     if the_suggestion is None:
