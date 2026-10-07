@@ -227,10 +227,27 @@ async def test_candidates_owned_by_others_are_removed(monkeypatch):
          "candidate_report_reference": "RC-0003", "candidate_claimed_by_user_id": 99,
          "candidate_incident_id": None, "relatedness_level": "high", "similarity_score": None},
     ]))
-    monkeypatch.setattr(the_repo, "list_run_candidate_signals", AsyncMock(return_value=[
-        {"related_incident_candidate_id": 10, "code": "same_dive_site",
-         "label": "Same named dive site", "detail": None},
-    ]))
+    monkeypatch.setattr(
+        the_repo,
+        "list_reverse_candidates_from_latest_runs",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        the_repo,
+        "list_candidate_signals_by_ids",
+        AsyncMock(
+            return_value=[
+                {
+                    "related_incident_candidate_id": 10,
+                    "code": "same_dive_site",
+                    "label": "Same named dive site",
+                    "detail": None,
+                    "signal_score": None,
+                    "signal_weight": None,
+                },
+            ]
+        ),
+    )
     monkeypatch.setattr(the_repo, "list_latest_pair_decisions", AsyncMock(return_value=[]))
     monkeypatch.setattr(the_repo, "get_latest_evidence_times", AsyncMock(return_value={}))
 
@@ -514,3 +531,236 @@ async def test_unauthorised_confirmation_never_acquires_locks(monkeypatch):
     the_service.the_repository.lock_relationship_reports.assert_not_awaited()
     confirm.assert_not_awaited()
     db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_older_report_sees_reverse_candidate_from_newer_report(
+    monkeypatch,
+):
+    """
+    R1 was analysed before R2 existed.
+
+    Later:
+        R2 -> R1 = HIGH
+
+    Opening R1 must therefore expose R2 as well.
+    """
+
+    monkeypatch.setattr(
+        the_service,
+        "load_owned_case",
+        AsyncMock(return_value={}),
+    )
+
+    monkeypatch.setattr(
+        the_service,
+        "utc_now",
+        lambda: THE_NOW,
+    )
+
+    the_repo = (
+        the_service.the_repository
+    )
+
+    monkeypatch.setattr(
+        the_repo,
+        "get_report_identity",
+        AsyncMock(
+            return_value={
+                "report_id": 1,
+                "report_reference": "RC-0001",
+                "claimed_by_user_id": 42,
+                "incident_id": None,
+            }
+        ),
+    )
+
+    # R1's own historical analysis found nothing.
+    monkeypatch.setattr(
+        the_repo,
+        "get_latest_detection_run",
+        AsyncMock(
+            return_value=make_run(
+                "completed"
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        the_repo,
+        "list_run_candidates",
+        AsyncMock(return_value=[]),
+    )
+
+    # Later R2 detected R1.
+    monkeypatch.setattr(
+        the_repo,
+        "list_reverse_candidates_from_latest_runs",
+        AsyncMock(
+            return_value=[
+                {
+                    "related_incident_candidate_id": 20,
+                    "candidate_report_id": 2,
+                    "candidate_report_reference": "RC-0002",
+                    "candidate_claimed_by_user_id": None,
+                    "candidate_incident_id": None,
+                    "relatedness_level": "high",
+                    "similarity_score": 0.91,
+                }
+            ]
+        ),
+    )
+
+    monkeypatch.setattr(
+        the_repo,
+        "list_candidate_signals_by_ids",
+        AsyncMock(
+            return_value=[
+                {
+                    "related_incident_candidate_id": 20,
+                    "code": "same_dive_site",
+                    "label": "Same named dive site",
+                    "detail": None,
+                    "signal_score": 1.0,
+                    "signal_weight": 0.30,
+                }
+            ]
+        ),
+    )
+
+    monkeypatch.setattr(
+        the_repo,
+        "list_latest_pair_decisions",
+        AsyncMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(
+        the_repo,
+        "get_latest_evidence_times",
+        AsyncMock(return_value={}),
+    )
+
+    the_response = (
+        await the_service.get_related_reports(
+            AsyncMock(),
+            "RC-0001",
+            42,
+        )
+    )
+
+    assert (
+        the_response.analysis_state
+        == RelatedAnalysisState.MATCHES_AVAILABLE
+    )
+
+    assert [
+        the_candidate.candidate_report_reference
+        for the_candidate
+        in the_response.candidates
+    ] == ["RC-0002"]
+
+    assert (
+        the_response
+        .candidates[0]
+        .relatedness_level
+        == "high"
+    )
+
+
+@pytest.mark.asyncio
+async def test_claim_and_compare_accepts_reverse_suggestion(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        the_service,
+        "load_owned_case",
+        AsyncMock(return_value={}),
+    )
+
+    monkeypatch.setattr(
+        the_service.the_repository,
+        "get_report_identity",
+        AsyncMock(
+            side_effect=[
+                {
+                    "report_id": 1,
+                    "report_reference": "RC-0001",
+                    "claimed_by_user_id": 42,
+                },
+                {
+                    "report_id": 2,
+                    "report_reference": "RC-0002",
+                    "claimed_by_user_id": None,
+                },
+            ]
+        ),
+    )
+
+    # First lookup:
+    # R1 -> R2 does not exist.
+    #
+    # Second lookup:
+    # R2 -> R1 exists.
+    the_find = AsyncMock(
+        side_effect=[
+            None,
+            {
+                "related_incident_candidate_id": 20,
+                "rule_version": "rid-v2-image",
+                "relatedness_level": "high",
+                "similarity_score": 0.91,
+                "signals": [],
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        the_service.the_repository,
+        "find_candidate_in_latest_run",
+        the_find,
+    )
+
+    the_claim = AsyncMock()
+
+    monkeypatch.setattr(
+        the_service,
+        "claim_report_service",
+        the_claim,
+    )
+
+    the_expected = object()
+
+    the_compare = AsyncMock(
+        return_value=the_expected
+    )
+
+    monkeypatch.setattr(
+        the_service,
+        "compare_reports",
+        the_compare,
+    )
+
+    the_result = (
+        await the_service.claim_and_compare(
+            AsyncMock(),
+            "RC-0001",
+            "RC-0002",
+            42,
+        )
+    )
+
+    assert the_result is the_expected
+
+    # Proves both directions were checked.
+    assert the_find.await_count == 2
+
+    the_claim.assert_awaited_once()
+
+    the_compare.assert_awaited_once_with(
+        db=pytest.ANY
+        if hasattr(pytest, "ANY")
+        else the_compare.await_args.kwargs["db"],
+        report_reference="RC-0001",
+        candidate_reference="RC-0002",
+        coordinator_id=42,
+    )

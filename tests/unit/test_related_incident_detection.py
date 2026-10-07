@@ -115,6 +115,33 @@ async def test_contradictory_confident_pins_override_same_site_name():
 
 
 @pytest.mark.asyncio
+async def test_uncertain_pins_do_not_override_same_site_name():
+    source = replace(
+        SOURCE,
+        dive_site_id=15,
+        generalised_latitude=Decimal("5.881"),
+        generalised_longitude=Decimal("102.712"),
+        location_confidence_code="within_1km",
+        location_source_code="manual_map_pin",
+    )
+
+    other = replace(
+        source,
+        report_id=2,
+        generalised_latitude=Decimal("5.904"),
+        generalised_longitude=Decimal("102.693"),
+    )
+
+    outcome = await engine.match_related_reports(
+        source,
+        [other],
+    )
+
+    assert len(outcome.candidates) == 1
+    assert outcome.candidates[0].candidate_report_id == 2
+
+
+@pytest.mark.asyncio
 async def test_rank_cap_duplicate_and_self_filter():
     pool = [SOURCE, candidate(), candidate(), replace(SOURCE, report_id=3, description=None)]
     outcome = await engine.match_related_reports(SOURCE, pool, engine.MatchingRules(result_limit=1))
