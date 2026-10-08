@@ -203,32 +203,75 @@ class CaseTriageContext(APIModel):
 
 class AISuggestionSummary(APIModel):
     """
-    One field the Observer reviewed before submitting (US5.2).
+    One Observer-reviewed AI suggestion shown to the
+    Coordinator.
 
-    The value is what the Observer ended up with, not what the model proposed.
-    status is what tells the two apart.
+    Provenance is suggestion-specific.
+
+    Smart Report Structuring and Visual Recognition are
+    independent advisory sources and may both contribute
+    suggestions to the same report field.
+
+    value is the value retained after Observer review.
+
+    status indicates whether the Observer accepted or
+    corrected the suggestion.
+
+    Removed suggestions remain stored for provenance but
+    are deliberately not returned in the Coordinator case
+    projection because the Observer rejected them.
     """
 
     field: str
 
     label: str
 
-    value: str | None = None
+    value: (
+        str | None
+    ) = None
 
-    # confirmed if accepted unchanged, corrected if the Observer edited it.
-    # Removed suggestions are stored but never returned: the Observer rejected
-    # them, so they describe nothing about this report.
+    # QA-AI-01:
+    #
+    # Canonical persisted values currently include:
+    #
+    # smart_report
+    # visual_recognition
+    #
+    # Keep this as str rather than duplicating the database
+    # vocabulary in another enum.
+    source: str
+
+    # Visual Recognition may provide confidence.
+    # Smart Report currently stores null here.
+    confidence: (
+        float | None
+    ) = Field(
+        default=None,
+        ge=0,
+        le=1,
+    )
+
     status: str
 
 
 class AIAssistedContext(APIModel):
     """
-    AI output remains structurally separate from Observer statements and
-    Coordinator decisions.
+    AI output remains structurally separate from Observer
+    statements and Coordinator decisions.
 
-    This block says what a model proposed and what the Observer did about it.
-    It says nothing about whether the reported threat is really there. No
-    Coordinator workflow reads it, and nothing here can move a case.
+    Each suggestion carries its own source and confidence,
+    which are the authoritative provenance fields.
+
+    source at this block level is retained as a safe summary
+    for existing clients:
+
+        smart_report
+        visual_recognition
+        mixed
+        null
+
+    Nothing in this block verifies a reported threat or
+    changes the case workflow.
     """
 
     available: bool = False
@@ -237,10 +280,7 @@ class AIAssistedContext(APIModel):
         str | None
     ) = None
 
-    # Null on every report. When Smart Report Structuring produced the
-    # suggestions is not captured anywhere: the submission contract carries
-    # field, value and status, and no timestamp. Returning the submission time
-    # would answer a different question under this label.
+    # AI-generation time is not currently persisted.
     generated_at: (
         datetime | None
     ) = None
@@ -256,6 +296,7 @@ class AIAssistedContext(APIModel):
     ] = Field(
         default_factory=list,
     )
+
 
 class InformationExchangeEntry(APIModel):
     """
@@ -464,11 +505,11 @@ class CaseClosureCreate(APIModel):
     """
     What a coordinator supplies to close a case.
 
-    Closure vocabulary is now database-owned through
+    Closure vocabulary is database-owned through
     closure_reason.is_selectable.
 
-    Python therefore no longer hardcodes the old Iteration
-    1 list.
+    Python therefore does not duplicate the selectable
+    closure-reason vocabulary.
     """
 
     closure_reason_code: str = Field(

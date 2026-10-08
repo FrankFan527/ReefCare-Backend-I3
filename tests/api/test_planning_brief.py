@@ -361,3 +361,138 @@ def test_openapi_contains_planning_brief_route(
             BASE
         ]
     )
+
+def test_planning_brief_rate_limit_returns_429(
+    client,
+    monkeypatch,
+):
+    """
+    QA-E9-03.
+
+    Public Planning Brief requests must be bounded before
+    repeated calls can continue reaching Gemini-backed
+    planning work.
+    """
+
+    from app.api.dependencies import (
+        rate_limit as rate_limit_dependency,
+    )
+
+    limiter = (
+        rate_limit_dependency
+        .planning_brief_limiter
+    )
+
+    old_max_requests = (
+        limiter.max_requests
+    )
+
+    old_window_seconds = (
+        limiter.window_seconds
+    )
+
+    limiter.max_requests = 2
+    limiter.window_seconds = 60
+
+    # Clear process-local test state so this test remains
+    # independent of previous Planning Brief API tests.
+    limiter._requests.clear()
+
+    service_mock = AsyncMock(
+        return_value=(
+            PlanningBriefResponse(
+                site_id=23,
+
+                planned_date=date(
+                    2026,
+                    10,
+                    6,
+                ),
+
+                status="generated",
+
+                text="Brief",
+
+                generated_at=(
+                    datetime.fromisoformat(
+                        "2026-10-04T19:00:00+08:00"
+                    )
+                ),
+            )
+        )
+    )
+
+    monkeypatch.setattr(
+        planning_routes,
+        "generate_planning_brief",
+        service_mock,
+    )
+
+    payload = {
+        "siteId":
+            23,
+
+        "plannedDate":
+            "2026-10-06",
+    }
+
+    try:
+        first = client.post(
+            BASE,
+            json=payload,
+        )
+
+        second = client.post(
+            BASE,
+            json=payload,
+        )
+
+        blocked = client.post(
+            BASE,
+            json=payload,
+        )
+
+        assert (
+            first.status_code
+            == 200
+        )
+
+        assert (
+            second.status_code
+            == 200
+        )
+
+        assert (
+            blocked.status_code
+            == 429
+        )
+
+        assert (
+            "retry-after"
+            in blocked.headers
+        )
+
+        body = blocked.json()
+
+        assert (
+            body["code"]
+            == "rate_limit_exceeded"
+        )
+
+        # The blocked request must stop before service/
+        # provider-backed planning work begins.
+        assert (
+            service_mock.await_count
+            == 2
+        )
+
+    finally:
+        limiter._requests.clear()
+
+        limiter.max_requests = (
+            old_max_requests
+        )
+
+        limiter.window_seconds = (
+            old_window_seconds
+        )

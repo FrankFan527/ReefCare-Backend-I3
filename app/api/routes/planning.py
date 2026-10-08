@@ -16,11 +16,15 @@ from datetime import date
 
 from fastapi import (
     APIRouter,
+    Depends,
     Query,
 )
 
 from app.api.dependencies.db import (
     DatabaseSession,
+)
+from app.api.dependencies.rate_limit import (
+    apply_planning_brief_rate_limit,
 )
 from app.schemas.planning import (
     DateComparisonResponse,
@@ -137,6 +141,11 @@ async def get_site_comparison(
     response_model=(
         PlanningBriefResponse
     ),
+    dependencies=[
+        Depends(
+            apply_planning_brief_rate_limit
+        ),
+    ],
 )
 async def create_planning_brief(
     brief_input: PlanningBriefRequest,
@@ -144,6 +153,10 @@ async def create_planning_brief(
 ):
     """
     US9.4 generate an optional AI-written planning brief.
+
+    The endpoint remains public, but requests are
+    rate-limited independently before Gemini-backed work
+    begins.
 
     The client supplies only site/date intent. Forecast and
     public reef context are resolved by the backend.
