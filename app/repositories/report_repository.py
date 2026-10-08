@@ -1049,8 +1049,15 @@ async def get_observer_contribution(
     report_reference: str,
 ) -> dict | None:
     """
-    Return the latest publishable E7 action/follow-up state
-    for one Observer-owned report.
+    Return the latest valid E7 action/follow-up state for
+    one Observer-owned report.
+
+    E6 is private feedback to the submitting Observer.
+    Therefore it must not depend on
+    case_action.is_publishable.
+
+    is_publishable is reserved for the E8 public-activity
+    publication boundary.
 
     The projection deliberately excludes:
     - created_by
@@ -1058,11 +1065,19 @@ async def get_observer_contribution(
     - internal notes
     - source_reference
     - evidence references
+    - reviewer identity
 
-    A planned action therefore remains planned, and an
+    Only the latest currently valid follow-up is returned.
+
+    Records are excluded when:
+    - they are demonstration records
+    - they have been superseded by a later correction
+
+    A planned action therefore remains planned, while an
     action_taken record may be described as completed.
 
-    Only explicitly publishable records may reach E6.
+    The service layer remains responsible for converting
+    the returned record into an Observer-safe summary.
     """
 
     result = await db.execute(
@@ -1113,13 +1128,20 @@ async def get_observer_contribution(
                 AND r.deleted_at
                     IS NULL
 
-                AND ca.is_publishable
-                    IS TRUE
-
                 AND COALESCE(
                     ca.is_demonstration,
                     FALSE
                 ) IS FALSE
+
+                AND NOT EXISTS (
+                    SELECT 1
+
+                    FROM case_action AS later
+
+                    WHERE
+                        later.supersedes_case_action_id =
+                            ca.case_action_id
+                )
 
             ORDER BY
                 ca.created_at DESC,
