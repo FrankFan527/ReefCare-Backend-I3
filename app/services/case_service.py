@@ -1,7 +1,13 @@
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import (
+    SQLAlchemyError,
+)
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+)
 
-from app.core.enums import CaseStatus
+from app.core.enums import (
+    CaseStatus,
+)
 from app.core.exceptions import (
     AuthorizationError,
     DatabaseOperationError,
@@ -70,6 +76,121 @@ async def get_owned_case(
     return case
 
 
+def _summarise_ai_sources(
+    reviewed_suggestions,
+) -> str | None:
+    """
+    Build a safe block-level provenance summary.
+
+    Individual AISuggestionSummary.source values remain the
+    authoritative source information.
+
+    The block-level source exists for compatibility with
+    clients that already consume aiAssisted.source.
+
+    Returns:
+
+        smart_report
+        visual_recognition
+        mixed
+        None
+    """
+
+    sources = {
+        row["source"]
+        for row
+        in reviewed_suggestions
+        if (
+            row.get(
+                "source"
+            )
+            is not None
+        )
+    }
+
+    if not sources:
+        return None
+
+    if len(sources) == 1:
+        return next(
+            iter(
+                sources
+            )
+        )
+
+    return "mixed"
+
+
+def _build_ai_assisted_context(
+    reviewed_suggestions,
+) -> AIAssistedContext:
+    """
+    Build the Coordinator-facing AI assistance projection.
+
+    QA-AI-01:
+    Smart Report and Visual Recognition provenance is kept
+    at suggestion level instead of labelling every AI value
+    as Smart Report.
+
+    Removed suggestions are already excluded by the
+    repository because the Observer rejected them.
+    """
+
+    return AIAssistedContext(
+        available=bool(
+            reviewed_suggestions
+        ),
+
+        source=(
+            _summarise_ai_sources(
+                reviewed_suggestions
+            )
+        ),
+
+        # AI generation time is not persisted.
+        generated_at=None,
+
+        is_unverified_ai_output=True,
+
+        suggestions=[
+            AISuggestionSummary(
+                field=row[
+                    "field"
+                ],
+
+                label=(
+                    _FIELD_LABELS.get(
+                        row[
+                            "field"
+                        ],
+                        row[
+                            "field"
+                        ],
+                    )
+                ),
+
+                value=row[
+                    "suggested_value"
+                ],
+
+                status=row[
+                    "status"
+                ],
+
+                source=row[
+                    "source"
+                ],
+
+                confidence=row[
+                    "confidence"
+                ],
+            )
+            for row
+            in reviewed_suggestions
+        ],
+    )
+
+
 async def get_coordinator_case(
     db: AsyncSession,
     report_reference: str,
@@ -84,7 +205,8 @@ async def get_coordinator_case(
     - authorised precise location
     - safe evidence metadata
     - latest saved US5.4 response decision, when one exists
-    - what the Observer decided about each AI suggestion
+    - Observer-reviewed AI suggestions with per-suggestion
+      source provenance
 
     No decision is a valid state and returns
     latestDecision = null.
@@ -116,9 +238,11 @@ async def get_coordinator_case(
         )
     )
 
-    # US6.3 AC4. Ownership was already established by
-    # get_owned_case() above, so the exchange is fetched
-    # without repeating the check.
+    # US6.3 AC4.
+    #
+    # Ownership was already established by get_owned_case()
+    # above, so the exchange can be fetched without
+    # repeating the ownership check.
     information_exchange = (
         await get_information_exchange(
             db=db,
@@ -126,16 +250,13 @@ async def get_coordinator_case(
         )
     )
 
-    # US5.2. What the Observer decided about each AI suggestion
-    # before submitting. Only confirmed and corrected entries are
-    # returned: a removed suggestion was rejected by the Observer,
-    # so it describes nothing about this report.
+    # US5.2 / QA-AI-01.
     #
-    # available is false when a report carries none, which is every
-    # report submitted before this was built. The block is still
-    # returned rather than omitted, so the interface can state that
-    # a report had no AI assistance rather than leaving the
-    # Coordinator to infer it from a missing field.
+    # The repository returns only confirmed/corrected
+    # suggestions and already includes source + confidence.
+    #
+    # A removed suggestion was rejected by the Observer and
+    # therefore is not shown as report context.
     reviewed_suggestions = (
         await get_reviewed_ai_suggestions(
             db=db,
@@ -143,53 +264,24 @@ async def get_coordinator_case(
         )
     )
 
-    ai_assisted = AIAssistedContext(
-        available=bool(
+    ai_assisted = (
+        _build_ai_assisted_context(
             reviewed_suggestions
-        ),
-
-        source=(
-            "smart_report_structuring"
-            if reviewed_suggestions
-            else None
-        ),
-
-        # Not captured anywhere. The submission contract carries
-        # field, value and status, and no timestamp, so there is
-        # nothing to return. Substituting the submission time would
-        # answer a different question under this label.
-        generated_at=None,
-
-        is_unverified_ai_output=True,
-
-        suggestions=[
-            AISuggestionSummary(
-                field=row["field"],
-
-                # Derived from the Smart Report field map rather
-                # than stored, so a wording change lands in one
-                # place instead of two.
-                label=_FIELD_LABELS.get(
-                    row["field"],
-                    row["field"],
-                ),
-
-                value=row["suggested_value"],
-
-                status=row["status"],
-            )
-            for row in reviewed_suggestions
-        ],
+        )
     )
 
-    # US5.2 AC2. US5.6 v2.2 is a separate geographic-analysis API. Fetch optional
-    # hotspot-context independently so an analysis failure cannot block review.
+    # US5.2 AC2.
+    #
+    # Hotspot/context analysis remains independent so a
+    # failure there cannot block the core review projection.
     return build_coordinator_case_projection(
         case=case,
         location=location,
         evidence_rows=evidence_rows,
         latest_decision=latest_decision,
-        information_exchange=information_exchange,
+        information_exchange=(
+            information_exchange
+        ),
         ai_assisted=ai_assisted,
     )
 
@@ -204,8 +296,9 @@ async def set_case_under_review(
 
     Ownership is checked before the workflow transition.
 
-    PostgreSQL reefcare_change_status() remains authoritative
-    for the actual status change and audit-event creation.
+    PostgreSQL reefcare_change_status() remains
+    authoritative for the actual status change and
+    audit-event creation.
     """
 
     case = await get_owned_case(
@@ -214,9 +307,11 @@ async def set_case_under_review(
         coordinator_id=coordinator_id,
     )
 
-    current_status = case[
-        "status_code"
-    ]
+    current_status = (
+        case[
+            "status_code"
+        ]
+    )
 
     if (
         current_status
@@ -232,9 +327,13 @@ async def set_case_under_review(
             db=db,
             report_reference=report_reference,
             status_code=(
-                CaseStatus.UNDER_REVIEW.value
+                CaseStatus
+                .UNDER_REVIEW
+                .value
             ),
-            actor_user_id=coordinator_id,
+            actor_user_id=(
+                coordinator_id
+            ),
         )
 
         await db.commit()
