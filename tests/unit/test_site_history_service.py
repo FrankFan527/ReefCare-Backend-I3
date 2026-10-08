@@ -263,3 +263,24 @@ async def test_no_private_report_content_is_returned(monkeypatch):
 
     for the_forbidden in ("description", "latitude", "longitude", "observer", "notes"):
         assert the_forbidden not in the_payload
+
+
+# ---------------------------------------------------------------------------
+# QA-E8-01 — a closed case is never shown as accepted
+# ---------------------------------------------------------------------------
+
+def test_a_closed_case_shows_its_closed_label_not_accepted():
+    the_row = make_observation("closed")
+    the_row["case_status_label"] = "Closed — No Action Required"
+
+    the_item = the_service.to_observation_item(the_row)
+
+    assert the_item.assessment_state == AssessmentState.CLOSED
+    assert the_item.assessment_state_label == "Closed — No Action Required"
+    assert "accepted" not in the_item.assessment_state_label.lower()
+
+
+def test_a_closed_case_without_a_status_label_falls_back_to_closed():
+    the_item = the_service.to_observation_item(make_observation("closed"))
+
+    assert the_item.assessment_state_label == "Closed"
