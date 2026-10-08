@@ -1,0 +1,59 @@
+{
+    "evaluation": "E9 Dive Planning Brief Manual Review",
+    "reviewScale": {
+      "clarity": "0-2",
+      "usefulness": "0-2"
+    },
+    "reviews": {
+      "S01": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 2,
+        "reviewerNotes": "Clear, grounded and appropriately caveated."
+      },
+      "S02": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 2,
+        "reviewerNotes": "Correctly maintains the mixed planning interpretation without turning it into a safety judgement."
+      },
+      "S03": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 1.5,
+        "reviewerNotes": "Accurate overall; the phrase \"no threats reported\" could be expressed more conservatively as no reviewed threat summary being available."
+      },
+      "S04": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 1.5,
+        "reviewerNotes": "Correct caveat overall, but \"no threats on file\" slightly broadens the intended meaning of no reviewed public ReefCare context."
+      },
+      "S05": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 1.5,
+        "reviewerNotes": "Clear and useful, but \"submitted in September\" is slightly more specific than the stored mostRecentMonth fact supports."
+      },
+      "S06": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 1.5,
+        "reviewerNotes": "Useful and accurate overall; absence-of-threat wording could be more precise."
+      },
+      "S07": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 2,
+        "reviewerNotes": "Correctly keeps observations under review separate from confirmed or accepted findings."
+      },
+      "S08": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 1.5,
+        "reviewerNotes": "Strong summary of multiple reviewed categories, although \"reported in [month]\" slightly exceeds the exact stored mostRecentMonth fact."
+      },
+      "S09": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 2,
+        "reviewerNotes": "Clear and appropriately cautious; strong adverse planning signals were not converted into a dive-safety verdict."
+      },
+      "S10": {
+        "clarityScoreOutOf2": 2,
+        "usefulnessScoreOutOf2": 2,
+        "reviewerNotes": "Handles dense context accurately and concisely without adding unsupported threats or safety conclusions."
+      }
+    }
+  }

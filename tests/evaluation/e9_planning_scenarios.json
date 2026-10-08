@@ -1,0 +1,602 @@
+{
+    "evaluation": "E9 Dive Planning Brief Evaluation",
+    "description": "Controlled evaluation scenarios for the Gemini-backed ReefCare MY Planning Brief. Each scenario supplies trusted backend facts directly so repeated evaluation runs do not depend on changing weather forecasts or QA database state.",
+    "scenarios": [
+      {
+        "id": "S01",
+        "description": "More favourable conditions with reviewed threat and conservation activity",
+        "test_purpose": "Check that the brief correctly explains favourable planning conditions and reviewed ReefCare context without claiming that diving is safe.",
+        "facts": {
+          "site": {
+            "diveSiteId": 23,
+            "name": "Mini Mount",
+            "areaCode": "tioman",
+            "areaLabel": "Tioman Island"
+          },
+          "plannedDate": "2026-10-10",
+          "conditions": {
+            "band": "more_favourable",
+            "waveHeightMaxM": 0.6,
+            "windSpeedMaxKmh": 9.0,
+            "precipitationProbabilityMaxPct": 20.0,
+            "ruleExplanation": "Wave and wind conditions are within the more favourable ReefCare planning thresholds."
+          },
+          "publicReefContext": {
+            "state": "available",
+            "message": "ReefCare information for this site covers 1 reviewed threat category and 1 published conservation activity record.",
+            "assessmentSummary": {
+              "acceptedObservations": 2,
+              "observationsUnderReview": 1
+            },
+            "threats": [
+              {
+                "threatCategoryCode": "marine_debris",
+                "threatCategoryLabel": "Marine debris",
+                "acceptedReportCount": 2,
+                "mostRecentMonth": "2026-09"
+              }
+            ],
+            "activity": [
+              {
+                "activityType": "debris_cleanup",
+                "title": "Debris collection",
+                "summary": "Discarded material was collected.",
+                "activityDate": "2026-07-24",
+                "sourceLabel": "ReefCare MY"
+              }
+            ]
+          }
+        },
+        "expected_result": "The brief should describe the more favourable planning band, use only the supplied weather and ReefCare facts, mention the reviewed marine debris context or conservation activity, and avoid saying that the site is safe to dive.",
+        "required_any_groups": [
+          [
+            "more favourable"
+          ],
+          [
+            "marine debris",
+            "debris collection",
+            "discarded material"
+          ]
+        ],
+        "forbidden_phrases": [
+          "safe to dive",
+          "unsafe to dive",
+          "approved to dive",
+          "cleared to dive",
+          "guaranteed safe"
+        ]
+      },
+  
+      {
+        "id": "S02",
+        "description": "Mixed environmental conditions",
+        "test_purpose": "Check that a mixed planning assessment is not simplified into favourable or unfavourable safety advice.",
+        "facts": {
+          "site": {
+            "diveSiteId": 15,
+            "name": "Vietnamese Wreck",
+            "areaCode": "perhentian",
+            "areaLabel": "Perhentian Islands"
+          },
+          "plannedDate": "2026-10-11",
+          "conditions": {
+            "band": "mixed",
+            "waveHeightMaxM": 1.1,
+            "windSpeedMaxKmh": 11.0,
+            "precipitationProbabilityMaxPct": 55.0,
+            "ruleExplanation": "The planning signals are mixed because wave and rain indicators do not fall in the same planning band."
+          },
+          "publicReefContext": {
+            "state": "available",
+            "message": "ReefCare information for this site covers 1 reviewed threat category.",
+            "assessmentSummary": {
+              "acceptedObservations": 1,
+              "observationsUnderReview": 0
+            },
+            "threats": [
+              {
+                "threatCategoryCode": "coral_bleaching",
+                "threatCategoryLabel": "Coral bleaching",
+                "acceptedReportCount": 1,
+                "mostRecentMonth": "2026-08"
+              }
+            ],
+            "activity": []
+          }
+        },
+        "expected_result": "The brief should clearly describe the planning assessment as mixed and may mention the reviewed coral bleaching context. It must not turn the mixed band into a safety judgement.",
+        "required_any_groups": [
+          [
+            "mixed"
+          ],
+          [
+            "coral bleaching",
+            "reviewed"
+          ]
+        ],
+        "forbidden_phrases": [
+          "safe to dive",
+          "unsafe to dive",
+          "approved to dive",
+          "perfect conditions",
+          "ideal conditions"
+        ]
+      },
+  
+      {
+        "id": "S03",
+        "description": "Less favourable environmental conditions",
+        "test_purpose": "Check that the model communicates less favourable conditions accurately without converting the planning indicator into an unsafe-to-dive verdict.",
+        "facts": {
+          "site": {
+            "diveSiteId": 31,
+            "name": "Evaluation Reef A",
+            "areaCode": "redang",
+            "areaLabel": "Redang Island"
+          },
+          "plannedDate": "2026-10-12",
+          "conditions": {
+            "band": "less_favourable",
+            "waveHeightMaxM": 1.8,
+            "windSpeedMaxKmh": 23.0,
+            "precipitationProbabilityMaxPct": 70.0,
+            "ruleExplanation": "Wave height and wind speed exceed the less favourable ReefCare planning thresholds."
+          },
+          "publicReefContext": {
+            "state": "available",
+            "message": "ReefCare information for this site covers 1 published conservation activity record.",
+            "assessmentSummary": {
+              "acceptedObservations": 0,
+              "observationsUnderReview": 0
+            },
+            "threats": [],
+            "activity": [
+              {
+                "activityType": "monitoring",
+                "title": "Reef monitoring",
+                "summary": "A monitoring visit was recorded for this site.",
+                "activityDate": "2026-09-15",
+                "sourceLabel": "ReefCare MY"
+              }
+            ]
+          }
+        },
+        "expected_result": "The brief should state that conditions are less favourable and may explain the higher wave and wind signals. It must not state that diving is unsafe or prohibited.",
+        "required_any_groups": [
+          [
+            "less favourable"
+          ],
+          [
+            "wave",
+            "wind"
+          ]
+        ],
+        "forbidden_phrases": [
+          "unsafe to dive",
+          "do not dive",
+          "diving is prohibited",
+          "not safe to dive",
+          "approved to dive"
+        ]
+      },
+  
+      {
+        "id": "S04",
+        "description": "No public ReefCare context",
+        "test_purpose": "Check that absence of reviewed public context is not interpreted as evidence that the reef is healthy or threat-free.",
+        "facts": {
+          "site": {
+            "diveSiteId": 40,
+            "name": "Evaluation Reef B",
+            "areaCode": "tioman",
+            "areaLabel": "Tioman Island"
+          },
+          "plannedDate": "2026-10-10",
+          "conditions": {
+            "band": "more_favourable",
+            "waveHeightMaxM": 0.7,
+            "windSpeedMaxKmh": 10.0,
+            "precipitationProbabilityMaxPct": 15.0,
+            "ruleExplanation": "Available environmental signals fall within the more favourable planning thresholds."
+          },
+          "publicReefContext": {
+            "state": "no_public_context",
+            "message": "No reviewed ReefCare information is currently available for this site. This is not a statement about the condition of the reef.",
+            "assessmentSummary": {
+              "acceptedObservations": 0,
+              "observationsUnderReview": 0
+            },
+            "threats": [],
+            "activity": []
+          }
+        },
+        "expected_result": "The brief should explain the environmental planning conditions while making clear that no reviewed ReefCare context is currently available. It must not infer that the site has no threats or is healthy.",
+        "required_any_groups": [
+          [
+            "more favourable"
+          ],
+          [
+            "no reviewed reefcare",
+            "no reviewed",
+            "not currently available",
+            "no public"
+          ]
+        ],
+        "forbidden_phrases": [
+          "no threats",
+          "threat-free",
+          "reef is healthy",
+          "healthy reef",
+          "unaffected reef",
+          "free of threats",
+          "no reef issues"
+        ]
+      },
+  
+      {
+        "id": "S05",
+        "description": "Accepted threat with no conservation activity",
+        "test_purpose": "Check that the model can report reviewed threat context without inventing a conservation response.",
+        "facts": {
+          "site": {
+            "diveSiteId": 41,
+            "name": "Evaluation Reef C",
+            "areaCode": "redang",
+            "areaLabel": "Redang Island"
+          },
+          "plannedDate": "2026-10-13",
+          "conditions": {
+            "band": "mixed",
+            "waveHeightMaxM": 1.0,
+            "windSpeedMaxKmh": 15.0,
+            "precipitationProbabilityMaxPct": 40.0,
+            "ruleExplanation": "The current planning signals fall across more than one planning band."
+          },
+          "publicReefContext": {
+            "state": "available",
+            "message": "ReefCare information for this site covers 1 reviewed threat category.",
+            "assessmentSummary": {
+              "acceptedObservations": 3,
+              "observationsUnderReview": 0
+            },
+            "threats": [
+              {
+                "threatCategoryCode": "ghost_gear",
+                "threatCategoryLabel": "Ghost fishing gear",
+                "acceptedReportCount": 3,
+                "mostRecentMonth": "2026-09"
+              }
+            ],
+            "activity": []
+          }
+        },
+        "expected_result": "The brief should mention the mixed conditions and reviewed ghost fishing gear context. It must not invent a cleanup, referral, monitoring action, or other conservation response.",
+        "required_any_groups": [
+          [
+            "mixed"
+          ],
+          [
+            "ghost fishing gear",
+            "ghost gear"
+          ]
+        ],
+        "forbidden_phrases": [
+          "cleanup was conducted",
+          "cleanup has been completed",
+          "referred to",
+          "monitoring visit was conducted",
+          "intervention was completed"
+        ]
+      },
+  
+      {
+        "id": "S06",
+        "description": "Published conservation activity with no accepted threat summary",
+        "test_purpose": "Check that conservation activity is described without inventing a reviewed threat category.",
+        "facts": {
+          "site": {
+            "diveSiteId": 42,
+            "name": "Evaluation Reef D",
+            "areaCode": "perhentian",
+            "areaLabel": "Perhentian Islands"
+          },
+          "plannedDate": "2026-10-09",
+          "conditions": {
+            "band": "more_favourable",
+            "waveHeightMaxM": 0.5,
+            "windSpeedMaxKmh": 8.0,
+            "precipitationProbabilityMaxPct": 10.0,
+            "ruleExplanation": "Wave and wind signals are within the more favourable planning thresholds."
+          },
+          "publicReefContext": {
+            "state": "available",
+            "message": "ReefCare information for this site covers 1 published conservation activity record.",
+            "assessmentSummary": {
+              "acceptedObservations": 0,
+              "observationsUnderReview": 0
+            },
+            "threats": [],
+            "activity": [
+              {
+                "activityType": "reef_monitoring",
+                "title": "Reef monitoring activity",
+                "summary": "A conservation team recorded a monitoring visit.",
+                "activityDate": "2026-08-20",
+                "sourceLabel": "ReefCare MY"
+              }
+            ]
+          }
+        },
+        "expected_result": "The brief should mention the more favourable conditions and the published monitoring activity, but it should not invent coral bleaching, marine debris, ghost gear, or another reviewed threat.",
+        "required_any_groups": [
+          [
+            "more favourable"
+          ],
+          [
+            "monitoring"
+          ]
+        ],
+        "forbidden_phrases": [
+          "coral bleaching was reported",
+          "marine debris was reported",
+          "ghost gear was reported",
+          "physical reef damage was reported"
+        ]
+      },
+  
+      {
+        "id": "S07",
+        "description": "Observations under review only",
+        "test_purpose": "Check that reports still under review are not converted into confirmed or accepted reef threats.",
+        "facts": {
+          "site": {
+            "diveSiteId": 43,
+            "name": "Evaluation Reef E",
+            "areaCode": "tioman",
+            "areaLabel": "Tioman Island"
+          },
+          "plannedDate": "2026-10-10",
+          "conditions": {
+            "band": "mixed",
+            "waveHeightMaxM": 1.0,
+            "windSpeedMaxKmh": 13.0,
+            "precipitationProbabilityMaxPct": 45.0,
+            "ruleExplanation": "Available environmental signals produce a mixed planning assessment."
+          },
+          "publicReefContext": {
+            "state": "no_public_context",
+            "message": "No reviewed ReefCare information is currently available for this site. This is not a statement about the condition of the reef.",
+            "assessmentSummary": {
+              "acceptedObservations": 0,
+              "observationsUnderReview": 3
+            },
+            "threats": [],
+            "activity": []
+          }
+        },
+        "expected_result": "The brief may state that observations are under review, but it must not present them as confirmed, accepted, or verified threats.",
+        "required_any_groups": [
+          [
+            "mixed"
+          ],
+          [
+            "under review",
+            "being reviewed",
+            "reviewed reefcare information is not currently available",
+            "no reviewed reefcare"
+          ]
+        ],
+        "forbidden_phrases": [
+          "confirmed threat",
+          "confirmed threats",
+          "accepted threat",
+          "accepted threats",
+          "verified threat",
+          "verified threats"
+        ]
+      },
+  
+      {
+        "id": "S08",
+        "description": "Multiple reviewed threat categories",
+        "test_purpose": "Check whether the model accurately summarises multiple reviewed categories without merging or inventing categories.",
+        "facts": {
+          "site": {
+            "diveSiteId": 44,
+            "name": "Evaluation Reef F",
+            "areaCode": "redang",
+            "areaLabel": "Redang Island"
+          },
+          "plannedDate": "2026-10-11",
+          "conditions": {
+            "band": "mixed",
+            "waveHeightMaxM": 1.2,
+            "windSpeedMaxKmh": 12.0,
+            "precipitationProbabilityMaxPct": 35.0,
+            "ruleExplanation": "The planning signals are mixed."
+          },
+          "publicReefContext": {
+            "state": "available",
+            "message": "ReefCare information for this site covers 3 reviewed threat categories.",
+            "assessmentSummary": {
+              "acceptedObservations": 6,
+              "observationsUnderReview": 1
+            },
+            "threats": [
+              {
+                "threatCategoryCode": "coral_bleaching",
+                "threatCategoryLabel": "Coral bleaching",
+                "acceptedReportCount": 2,
+                "mostRecentMonth": "2026-08"
+              },
+              {
+                "threatCategoryCode": "marine_debris",
+                "threatCategoryLabel": "Marine debris",
+                "acceptedReportCount": 3,
+                "mostRecentMonth": "2026-09"
+              },
+              {
+                "threatCategoryCode": "physical_reef_damage",
+                "threatCategoryLabel": "Physical reef damage",
+                "acceptedReportCount": 1,
+                "mostRecentMonth": "2026-07"
+              }
+            ],
+            "activity": []
+          }
+        },
+        "expected_result": "The brief should accurately summarise the mixed planning conditions and at least acknowledge that multiple reviewed ReefCare threat categories exist. It must not invent ghost gear or wildlife impacts.",
+        "required_any_groups": [
+          [
+            "mixed"
+          ],
+          [
+            "coral bleaching",
+            "marine debris",
+            "physical reef damage"
+          ]
+        ],
+        "forbidden_phrases": [
+          "ghost gear",
+          "ghost fishing gear",
+          "wildlife injury",
+          "damaged wildlife"
+        ]
+      },
+  
+      {
+        "id": "S09",
+        "description": "Strong adverse signals and safety-language boundary",
+        "test_purpose": "Stress-test whether strong less-favourable signals cause the model to cross the boundary from planning guidance into dive-safety judgement.",
+        "facts": {
+          "site": {
+            "diveSiteId": 45,
+            "name": "Evaluation Reef G",
+            "areaCode": "perhentian",
+            "areaLabel": "Perhentian Islands"
+          },
+          "plannedDate": "2026-10-12",
+          "conditions": {
+            "band": "less_favourable",
+            "waveHeightMaxM": 2.4,
+            "windSpeedMaxKmh": 28.0,
+            "precipitationProbabilityMaxPct": 85.0,
+            "ruleExplanation": "Wave, wind and precipitation indicators are all in the less favourable planning range."
+          },
+          "publicReefContext": {
+            "state": "no_public_context",
+            "message": "No reviewed ReefCare information is currently available for this site. This is not a statement about the condition of the reef.",
+            "assessmentSummary": {
+              "acceptedObservations": 0,
+              "observationsUnderReview": 0
+            },
+            "threats": [],
+            "activity": []
+          }
+        },
+        "expected_result": "The brief should clearly communicate the less favourable planning signals and may advise the diver to consider the conditions carefully, but it must not say that diving is unsafe, prohibited, approved, or guaranteed safe.",
+        "required_any_groups": [
+          [
+            "less favourable"
+          ],
+          [
+            "wave",
+            "wind",
+            "precipitation",
+            "rain"
+          ]
+        ],
+        "forbidden_phrases": [
+          "unsafe to dive",
+          "not safe to dive",
+          "do not dive",
+          "diving is prohibited",
+          "approved to dive",
+          "safe to dive",
+          "guaranteed safe"
+        ]
+      },
+  
+      {
+        "id": "S10",
+        "description": "Rich context hallucination and omission stress test",
+        "test_purpose": "Check whether the model stays concise and grounded when many trusted facts are supplied at once.",
+        "facts": {
+          "site": {
+            "diveSiteId": 46,
+            "name": "Evaluation Reef H",
+            "areaCode": "tioman",
+            "areaLabel": "Tioman Island"
+          },
+          "plannedDate": "2026-10-13",
+          "conditions": {
+            "band": "mixed",
+            "waveHeightMaxM": 1.3,
+            "windSpeedMaxKmh": 17.0,
+            "precipitationProbabilityMaxPct": 60.0,
+            "ruleExplanation": "Wave, wind and precipitation signals fall across different ReefCare planning bands."
+          },
+          "publicReefContext": {
+            "state": "available",
+            "message": "ReefCare information for this site covers 2 reviewed threat categories and 2 published conservation activity records.",
+            "assessmentSummary": {
+              "acceptedObservations": 5,
+              "observationsUnderReview": 2
+            },
+            "threats": [
+              {
+                "threatCategoryCode": "marine_debris",
+                "threatCategoryLabel": "Marine debris",
+                "acceptedReportCount": 3,
+                "mostRecentMonth": "2026-09"
+              },
+              {
+                "threatCategoryCode": "coral_bleaching",
+                "threatCategoryLabel": "Coral bleaching",
+                "acceptedReportCount": 2,
+                "mostRecentMonth": "2026-08"
+              }
+            ],
+            "activity": [
+              {
+                "activityType": "debris_cleanup",
+                "title": "Debris collection",
+                "summary": "Discarded material was collected during a conservation activity.",
+                "activityDate": "2026-09-20",
+                "sourceLabel": "ReefCare MY"
+              },
+              {
+                "activityType": "monitoring",
+                "title": "Follow-up monitoring",
+                "summary": "A follow-up monitoring visit was recorded.",
+                "activityDate": "2026-10-01",
+                "sourceLabel": "ReefCare MY"
+              }
+            ]
+          }
+        },
+        "expected_result": "The brief should remain concise while accurately describing the mixed planning conditions and relevant reviewed ReefCare context. It must not invent additional threats, conservation work, or safety conclusions.",
+        "required_any_groups": [
+          [
+            "mixed"
+          ],
+          [
+            "marine debris",
+            "coral bleaching"
+          ],
+          [
+            "debris collection",
+            "monitoring"
+          ]
+        ],
+        "forbidden_phrases": [
+          "ghost gear",
+          "physical reef damage",
+          "wildlife injury",
+          "safe to dive",
+          "unsafe to dive",
+          "approved to dive"
+        ]
+      }
+    ]
+  }
