@@ -44,6 +44,9 @@ THE_FOLLOW_UP_SELECT: str = """
         ca.next_follow_up_required,
         ca.next_follow_up_date,
 
+        ca.is_publishable,
+        ca.is_demonstration,
+
         ca.supersedes_case_action_id,
         (
             SELECT later.case_action_id
@@ -129,12 +132,16 @@ async def save_follow_up(
     next_follow_up_date: date | None,
     supersedes_case_action_id: int | None,
     created_by: int,
+    is_publishable: bool = False,
 ) -> dict | None:
     """
     Insert one follow-up record.
 
     Every shape rule is also a CHECK constraint or a trigger on the table, so
     a service bug cannot produce, say, a monitoring record with no condition.
+
+    is_publishable defaults to false. Only the publication step sets it, so a
+    new record or a correction is always private until someone publishes it.
     """
 
     the_result = await db.execute(
@@ -147,7 +154,7 @@ async def save_follow_up(
                  observations, recorded_outcome, notes,
                  monitoring_condition_id, condition_reviewed_by,
                  next_follow_up_required, next_follow_up_date,
-                 supersedes_case_action_id, created_by)
+                 supersedes_case_action_id, created_by, is_publishable)
 
             SELECT
                 r.report_id, :case_event_id, :action_type_id,
@@ -156,7 +163,7 @@ async def save_follow_up(
                 :observations, :recorded_outcome, :notes,
                 :monitoring_condition_id, :condition_reviewed_by,
                 :next_follow_up_required, :next_follow_up_date,
-                :supersedes_case_action_id, :created_by
+                :supersedes_case_action_id, :created_by, :is_publishable
 
             FROM report AS r
             WHERE r.report_reference = :report_reference
@@ -184,6 +191,7 @@ async def save_follow_up(
             "next_follow_up_date": next_follow_up_date,
             "supersedes_case_action_id": supersedes_case_action_id,
             "created_by": created_by,
+            "is_publishable": is_publishable,
         },
     )
 

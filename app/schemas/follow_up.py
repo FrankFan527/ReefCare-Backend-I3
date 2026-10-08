@@ -212,6 +212,21 @@ class FollowUpCorrection(APIModel):
     correction_reason: str = Field(min_length=1, max_length=500)
 
 
+class FollowUpPublication(APIModel):
+    """
+    Publish or withdraw a follow-up from public site activity (E8).
+
+    Follow-up records are append-only, so this also appends a superseding copy
+    of the record with the new publication state, and the original stays in
+    the history. Only the owning Coordinator may do it.
+    """
+
+    publish: bool
+
+    # optional reason, kept in the internal history note and never published
+    publication_note: str | None = Field(default=None, max_length=500)
+
+
 # ---------------------------------------------------------------------------
 # Responses
 # ---------------------------------------------------------------------------
@@ -258,6 +273,11 @@ class FollowUpResponse(APIModel):
 
     next_follow_up_required: bool = False
     next_follow_up_date: date | None = None
+
+    # E8 publication: false until the owning Coordinator publishes this
+    # version. A correction is always created unpublished.
+    is_publishable: bool = False
+    is_demonstration: bool = False
 
     # US7.1 AC8: the record this one replaced, and whether it was itself
     # replaced by a later correction

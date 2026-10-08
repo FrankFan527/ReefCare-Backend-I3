@@ -36,6 +36,7 @@ from app.schemas.follow_up import (
     FollowUpCreate,
     FollowUpEvidenceSummary,
     FollowUpListResponse,
+    FollowUpPublication,
     FollowUpResponse,
     FollowUpState,
     FollowUpType,
@@ -486,6 +487,10 @@ async def correct_follow_up(
 
     Nothing is overwritten: the original stays in the history and the new row
     points back at it, so who recorded what and when is never lost.
+
+    A correction is always created unpublished, even if the record it replaces
+    was published: a changed outcome is never shown publicly without being
+    published again.
     """
 
     the_case = await load_owned_case(
@@ -609,6 +614,169 @@ async def correct_follow_up(
         await db.rollback()
         raise DatabaseOperationError(
             "The correction could not be recorded"
+        ) from the_error
+
+    return to_follow_up_response(the_saved)
+
+
+# ---------------------------------------------------------------------------
+# E8 publication — an explicit, owner-only, append-only step
+# ---------------------------------------------------------------------------
+
+# Only work that has actually happened may be published: a taken action or an
+# outcome reported by an outside party. A planned action or a monitoring visit
+# stays private, so the public site never shows planned work as activity.
+THE_PUBLISHABLE_STATES: frozenset[str] = frozenset({
+    FollowUpState.ACTION_TAKEN.value,
+    FollowUpState.OUTCOME_RECORDED.value,
+})
+
+
+def assert_publication_change_allowed(
+    the_record: dict,
+    the_publish: bool,
+) -> None:
+    """
+    Pure rule check for a publish or withdraw request, unit-tested without a
+    database. Ownership is checked before this by load_owned_case().
+    """
+
+    if the_record.get("superseded_by_case_action_id") is not None:
+        raise WorkflowError(
+            "This record has been replaced by a later version. "
+            "Publish or withdraw the most recent version instead."
+        )
+
+    if the_record.get("is_demonstration"):
+        raise WorkflowError("Demonstration records are never published")
+
+    if bool(the_record.get("is_publishable")) == the_publish:
+        raise WorkflowError(
+            "This record is already published"
+            if the_publish
+            else "This record is not published"
+        )
+
+    if not the_publish:
+        return
+
+    if the_record.get("follow_up_state") not in THE_PUBLISHABLE_STATES:
+        raise WorkflowError(
+            "Only a taken action or an externally reported outcome can be "
+            "published. Planned actions and monitoring visits stay private."
+        )
+
+    if not (the_record.get("recorded_outcome") or "").strip():
+        raise WorkflowError(
+            "Add a recorded outcome before publishing: it is the only text "
+            "shown publicly."
+        )
+
+
+async def set_follow_up_publication(
+    db: AsyncSession,
+    report_reference: str,
+    case_action_id: int,
+    coordinator_id: int,
+    the_request: FollowUpPublication,
+) -> FollowUpResponse:
+    """
+    Publish or withdraw one follow-up from E8 public site activity.
+
+    case_action is append-only, so this appends a copy of the record with the
+    new publication state, superseding the original. The case status never
+    moves, and the history event carries no to_status_id, so the Observer
+    timeline is unchanged.
+    """
+
+    await load_owned_case(
+        db=db,
+        report_reference=report_reference,
+        coordinator_id=coordinator_id,
+    )
+
+    the_original = await the_repository.get_follow_up(
+        db=db,
+        report_reference=report_reference,
+        case_action_id=case_action_id,
+    )
+
+    if the_original is None:
+        raise NotFoundError(
+            f"Follow-up {case_action_id} was not found on report {report_reference}"
+        )
+
+    assert_publication_change_allowed(
+        the_record=the_original,
+        the_publish=the_request.publish,
+    )
+
+    # the type was valid when recorded; publication does not re-check whether
+    # it is still offered for new records
+    the_action_type = await get_action_type(
+        db=db,
+        action_type_code=the_original["action_type_code"],
+    )
+
+    if the_action_type is None:
+        raise DomainValidationError(
+            f"Unknown action type: {the_original['action_type_code']}"
+        )
+
+    the_line = (
+        "Publication: published to public site activity."
+        if the_request.publish
+        else "Publication: withdrawn from public site activity."
+    )
+    the_reason = _clean(the_request.publication_note)
+    if the_reason:
+        the_line = f"{the_line} {the_reason}"
+
+    # notes stay internal; the public view only ever reads recorded_outcome
+    the_note = f"{the_original['notes'] or ''}\n\n{the_line}".strip()
+
+    try:
+        the_case_event_id = await _open_history_event(
+            db=db,
+            report_reference=report_reference,
+            coordinator_id=coordinator_id,
+            note=the_line,
+            the_target_status=None,
+            the_current_status=the_original["status_code"],
+        )
+
+        the_saved = await the_repository.save_follow_up(
+            db=db,
+            report_reference=report_reference,
+            case_event_id=the_case_event_id,
+            action_type_id=the_action_type["action_type_id"],
+            follow_up_type=the_original["follow_up_type"],
+            follow_up_state=the_original["follow_up_state"],
+            recording_level=the_original["recording_level"],
+            action_date=the_original["action_date"],
+            responsible_team=the_original["responsible_team"],
+            source_reference=the_original["source_reference"],
+            observations=the_original["observations"],
+            recorded_outcome=the_original["recorded_outcome"],
+            notes=the_note,
+            monitoring_condition_id=None,
+            condition_reviewed_by=None,
+            next_follow_up_required=bool(the_original["next_follow_up_required"]),
+            next_follow_up_date=the_original["next_follow_up_date"],
+            supersedes_case_action_id=case_action_id,
+            created_by=coordinator_id,
+            is_publishable=the_request.publish,
+        )
+
+        if the_saved is None:
+            raise DatabaseOperationError("The publication change could not be recorded")
+
+        await db.commit()
+
+    except SQLAlchemyError as the_error:
+        await db.rollback()
+        raise DatabaseOperationError(
+            "The publication change could not be recorded"
         ) from the_error
 
     return to_follow_up_response(the_saved)

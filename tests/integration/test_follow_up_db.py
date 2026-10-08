@@ -19,10 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
-from app.core.exceptions import WorkflowError
+from app.core.exceptions import AuthorizationError, WorkflowError
+from app.repositories import public_context_repository
 from app.schemas.follow_up import (
     FollowUpCorrection,
     FollowUpCreate,
+    FollowUpPublication,
     FollowUpState,
     FollowUpType,
     MonitoringCreate,
@@ -306,3 +308,130 @@ async def test_correction_appends_rather_than_overwrites(the_session):
             text("UPDATE case_action SET notes = 'rewritten' WHERE case_action_id = :id"),
             {"id": the_original.case_action_id},
         )
+
+
+@pytest.mark.asyncio
+async def test_publication_is_owner_only_append_only_and_reset_by_correction(the_session):
+    the_case = await find_case_in_status(the_session, "referred")
+
+    if the_case is None:
+        pytest.skip("No referred report available on this database")
+
+    the_reference = the_case["report_reference"]
+    the_coordinator_id = the_case["coordinator_id"]
+
+    the_site_id = (
+        await the_session.execute(text(
+            """
+            SELECT dsn.dive_site_id FROM report AS r
+            JOIN dive_session AS dsn ON dsn.dive_session_id = r.dive_session_id
+            WHERE r.report_reference = :ref
+            """
+        ), {"ref": the_reference})
+    ).scalar_one_or_none()
+
+    if the_site_id is None:
+        pytest.skip("The referred report has no dive site")
+
+    async def public_summaries() -> list[dict]:
+        return await public_context_repository.list_publishable_activity(
+            the_session, the_site_id,
+        )
+
+    the_outcome = await the_service.record_follow_up(
+        the_session, the_reference, the_coordinator_id,
+        FollowUpCreate(
+            follow_up_type=FollowUpType.SOURCED_OUTCOME,
+            follow_up_state=FollowUpState.OUTCOME_RECORDED,
+            action_type_code="authority_notified",
+            recording_level="externally_sourced",
+            action_date="2026-10-02",
+            source_reference="Private contact: park officer, email 2026-10-02",
+            responsible_team="Named private team",
+            recorded_outcome="QA publication test outcome",
+        ),
+    )
+
+    # private by default
+    assert the_outcome.is_publishable is False
+    assert "QA publication test outcome" not in {a["summary"] for a in await public_summaries()}
+
+    # another coordinator cannot publish it
+    the_other_coordinator = (
+        await the_session.execute(text(
+            """
+            SELECT u.user_id FROM app_user AS u
+            JOIN app_role AS r ON r.role_id = u.role_id
+            WHERE r.code = 'case_coordinator' AND u.is_active AND u.user_id <> :me
+            ORDER BY u.user_id LIMIT 1
+            """
+        ), {"me": the_coordinator_id})
+    ).scalar_one_or_none()
+
+    if the_other_coordinator is not None:
+        with pytest.raises(AuthorizationError):
+            await the_service.set_follow_up_publication(
+                the_session, the_reference, the_outcome.case_action_id,
+                the_other_coordinator, FollowUpPublication(publish=True),
+            )
+
+    # the owner publishes: a superseding copy, published, case not moved
+    the_published = await the_service.set_follow_up_publication(
+        the_session, the_reference, the_outcome.case_action_id,
+        the_coordinator_id, FollowUpPublication(publish=True),
+    )
+
+    assert the_published.is_publishable is True
+    assert the_published.supersedes_case_action_id == the_outcome.case_action_id
+    assert the_published.status_code.value == "referred"
+
+    the_public = [a for a in await public_summaries() if a["summary"] == "QA publication test outcome"]
+    assert len(the_public) == 1
+
+    # only the safe fields reach the public view
+    assert the_public[0]["source_label"] == "Reported by an external organisation"
+    assert "Named private team" not in str(the_public[0])
+    assert "Private contact" not in str(the_public[0])
+
+    # a correction is created unpublished, so the changed outcome is not public
+    the_corrected = await the_service.correct_follow_up(
+        the_session, the_reference, the_published.case_action_id, the_coordinator_id,
+        FollowUpCorrection(
+            recorded_outcome="QA publication test outcome, corrected",
+            correction_reason="Outcome wording corrected",
+        ),
+    )
+
+    assert the_corrected.is_publishable is False
+    the_summaries = {a["summary"] for a in await public_summaries()}
+    assert "QA publication test outcome" not in the_summaries
+    assert "QA publication test outcome, corrected" not in the_summaries
+
+    # the superseded version can no longer be published or withdrawn
+    with pytest.raises(WorkflowError):
+        await the_service.set_follow_up_publication(
+            the_session, the_reference, the_published.case_action_id,
+            the_coordinator_id, FollowUpPublication(publish=False),
+        )
+
+    # republish the corrected version, then withdraw it
+    the_republished = await the_service.set_follow_up_publication(
+        the_session, the_reference, the_corrected.case_action_id,
+        the_coordinator_id, FollowUpPublication(publish=True),
+    )
+    assert "QA publication test outcome, corrected" in {a["summary"] for a in await public_summaries()}
+
+    the_withdrawn = await the_service.set_follow_up_publication(
+        the_session, the_reference, the_republished.case_action_id,
+        the_coordinator_id, FollowUpPublication(publish=False, publication_note="Partner asked"),
+    )
+    assert the_withdrawn.is_publishable is False
+    assert "QA publication test outcome, corrected" not in {a["summary"] for a in await public_summaries()}
+
+    # the full history keeps every version
+    the_full = await the_service.list_follow_ups_for_owned_case(
+        the_session, the_reference, the_coordinator_id, include_superseded=True
+    )
+    the_ids = {i.case_action_id for i in the_full.items}
+    for the_record in (the_outcome, the_published, the_corrected, the_republished, the_withdrawn):
+        assert the_record.case_action_id in the_ids
