@@ -20,7 +20,13 @@
 # Iteration 3 E6 extends the existing tracking layer with:
 #
 # - human-confirmed related-incident feedback
-# - publishable E7 follow-up/contribution outcomes
+# - Observer-safe E7 follow-up/contribution outcomes
+#
+# E6 is private feedback to the submitting Observer.
+# It does not depend on case_action.is_publishable.
+#
+# is_publishable belongs only to the E8 public-activity
+# publication boundary.
 #
 # No new workflow state is created here. Everything shown to the Observer is
 # projected from facts that already exist in E5/E7.
@@ -199,14 +205,23 @@ def build_action_contribution(
     action,
 ) -> ObserverContributionSummary | None:
     """
-    Convert one explicitly publishable E7 case_action into
-    an Observer-safe contribution summary.
+    Convert the latest valid E7 case_action into an
+    Observer-safe private contribution summary.
+
+    E6 private feedback does not depend on
+    case_action.is_publishable. That flag is reserved for
+    the E8 public-activity publication boundary.
 
     This function never infers that an action happened when
     the stored action_state says only that it was planned.
 
-    Internal notes, coordinator identity, responsible team
-    and source_reference are deliberately excluded.
+    Sourced external outcomes are identified separately
+    from ReefCare actions so an external report is never
+    presented as a ReefCare-completed intervention.
+
+    Internal notes, coordinator identity, responsible team,
+    source_reference and reviewer identity are deliberately
+    excluded.
     """
 
     if action is None:
@@ -235,6 +250,21 @@ def build_action_contribution(
         .lower()
     )
 
+    recording_level = (
+        action.get(
+            "recording_level"
+        )
+        or ""
+    )
+
+    recording_level_normalised = (
+        str(
+            recording_level
+        )
+        .strip()
+        .lower()
+    )
+
     recorded_outcome = action.get(
         "recorded_outcome"
     )
@@ -257,6 +287,48 @@ def build_action_contribution(
     )
 
     # ---------------------------------------------------------------
+    # Sourced external outcome.
+    #
+    # This is deliberately checked before action_state.
+    #
+    # A sourced_outcome is information reported from an
+    # external organisation/source. It does not prove that
+    # ReefCare itself performed or completed the action.
+    # ---------------------------------------------------------------
+
+    if (
+        follow_up_normalised
+        == "sourced_outcome"
+        or recording_level_normalised
+        == "externally_sourced"
+    ):
+        return ObserverContributionSummary(
+            contribution_type=(
+                "external_outcome"
+            ),
+
+            state="reported",
+
+            label=(
+                "An externally reported follow-up "
+                "outcome has been recorded for "
+                "this report."
+            ),
+
+            detail=recorded_outcome,
+
+            recorded_at=recorded_at,
+
+            next_follow_up_required=(
+                next_follow_up_required
+            ),
+
+            next_follow_up_date=(
+                next_follow_up_date
+            ),
+        )
+
+    # ---------------------------------------------------------------
     # Planned conservation action.
     #
     # This must never be described as completed.
@@ -265,19 +337,25 @@ def build_action_contribution(
     if action_state == "action_planned":
         return ObserverContributionSummary(
             contribution_type="action",
+
             state="planned",
+
             label=(
                 "A conservation action has been "
                 "planned in response to this report."
             ),
+
             detail=(
                 action_type_label
                 or recorded_outcome
             ),
+
             recorded_at=recorded_at,
+
             next_follow_up_required=(
                 next_follow_up_required
             ),
+
             next_follow_up_date=(
                 next_follow_up_date
             ),
@@ -290,19 +368,25 @@ def build_action_contribution(
     if action_state == "action_taken":
         return ObserverContributionSummary(
             contribution_type="action",
+
             state="completed",
+
             label=(
                 "A conservation action has been "
                 "recorded as completed."
             ),
+
             detail=(
                 recorded_outcome
                 or action_type_label
             ),
+
             recorded_at=recorded_at,
+
             next_follow_up_required=(
                 next_follow_up_required
             ),
+
             next_follow_up_date=(
                 next_follow_up_date
             ),
@@ -321,23 +405,29 @@ def build_action_contribution(
     ):
         return ObserverContributionSummary(
             contribution_type="monitoring",
+
             state="recorded",
+
             label=(
                 "Your report contributed to reef "
                 "monitoring and follow-up."
             ),
+
             detail=recorded_outcome,
+
             recorded_at=recorded_at,
+
             next_follow_up_required=(
                 next_follow_up_required
             ),
+
             next_follow_up_date=(
                 next_follow_up_date
             ),
         )
 
     # ---------------------------------------------------------------
-    # Generic publishable E7 follow-up.
+    # Generic valid E7 follow-up.
     #
     # Still truthful: it says only that follow-up was
     # recorded, not that a specific conservation outcome
@@ -346,16 +436,22 @@ def build_action_contribution(
 
     return ObserverContributionSummary(
         contribution_type="follow_up",
+
         state="recorded",
+
         label=(
             "A follow-up outcome has been recorded "
             "for this report."
         ),
+
         detail=recorded_outcome,
+
         recorded_at=recorded_at,
+
         next_follow_up_required=(
             next_follow_up_required
         ),
+
         next_follow_up_date=(
             next_follow_up_date
         ),
@@ -369,8 +465,8 @@ def build_status_contribution(
     Build a conservative contribution summary from the
     report's already-recorded workflow state.
 
-    Used only when there is no explicitly publishable E7
-    action/follow-up row.
+    Used only when there is no valid E7 action/follow-up row
+    available for the private Observer projection.
 
     The wording deliberately avoids claiming more than the
     stored state proves.
@@ -478,11 +574,14 @@ def get_observer_contribution_summary(
     """
     Return the strongest truthful contribution projection.
 
-    An explicitly publishable E7 action is preferred.
+    The latest valid E7 action/follow-up record is preferred.
 
-    If none exists, a small set of already-recorded case
-    statuses may still support a truthful contribution
-    message.
+    E6 private feedback does not depend on
+    case_action.is_publishable.
+
+    If no valid E7 record exists, a small set of
+    already-recorded case statuses may still support a
+    truthful contribution message.
     """
 
     action_contribution = (
@@ -692,7 +791,7 @@ def build_observer_timeline(
 
     Iteration 3 additionally allows:
     - a human-confirmed same-incident explanation
-    - one publishable follow-up/contribution event
+    - one latest valid follow-up/contribution event
 
     Neither extension exposes another report, another
     Observer, Coordinator identity or internal incident id.
@@ -768,7 +867,7 @@ def build_observer_timeline(
         )
 
     # ---------------------------------------------------------------
-    # Publishable E7 follow-up.
+    # Latest valid E7 follow-up for private Observer feedback.
     # ---------------------------------------------------------------
 
     contribution_summary = (
@@ -998,8 +1097,11 @@ async def get_observer_report(
     Precise location remains independently authorised by
     reefcare_report_location().
 
-    Iteration 3 also loads only the latest explicitly
-    publishable E7 contribution/follow-up record.
+    Iteration 3 also loads only the latest valid E7
+    contribution/follow-up record.
+
+    E6 private Observer feedback does not depend on
+    case_action.is_publishable.
     """
 
     try:

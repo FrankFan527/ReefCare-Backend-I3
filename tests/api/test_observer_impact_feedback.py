@@ -106,7 +106,10 @@ def test_planned_action_is_not_described_as_completed():
             "Debris removal",
 
         "follow_up_type":
-            "intervention",
+            "action",
+
+        "recording_level":
+            "coordinator_summary",
 
         "recorded_outcome":
             None,
@@ -167,7 +170,10 @@ def test_taken_action_is_described_as_completed():
             "Debris removal",
 
         "follow_up_type":
-            "intervention",
+            "action",
+
+        "recording_level":
+            "coordinator_summary",
 
         "recorded_outcome":
             "Ghost net removed from the reef.",
@@ -217,6 +223,9 @@ def test_monitoring_follow_up_is_projected_safely():
         "follow_up_type":
             "monitoring",
 
+        "recording_level":
+            "coordinator_summary",
+
         "recorded_outcome":
             "Site condition reviewed.",
 
@@ -256,6 +265,137 @@ def test_monitoring_follow_up_is_projected_safely():
         result.detail
         == "Site condition reviewed."
     )
+
+
+def test_sourced_external_outcome_is_clearly_identified():
+    """
+    E6 must not present an externally reported outcome as
+    ReefCare having completed the conservation action.
+    """
+
+    action = {
+        "action_state":
+            "recorded",
+
+        "action_type_label":
+            "Debris removal",
+
+        "follow_up_type":
+            "sourced_outcome",
+
+        "recording_level":
+            "externally_sourced",
+
+        "recorded_outcome":
+            (
+                "A partner organisation reported that "
+                "the debris had been removed."
+            ),
+
+        "created_at":
+            NOW,
+
+        "next_follow_up_required":
+            False,
+
+        "next_follow_up_date":
+            None,
+    }
+
+    result = build_action_contribution(
+        action
+    )
+
+    assert isinstance(
+        result,
+        ObserverContributionSummary,
+    )
+
+    assert (
+        result.contribution_type
+        == "external_outcome"
+    )
+
+    assert (
+        result.state
+        == "reported"
+    )
+
+    assert "externally" in (
+        result.label.lower()
+    )
+
+    assert "reported" in (
+        result.label.lower()
+    )
+
+    assert (
+        result.detail
+        ==
+        (
+            "A partner organisation reported that "
+            "the debris had been removed."
+        )
+    )
+
+    assert "completed" not in (
+        result.label.lower()
+    )
+
+
+def test_externally_sourced_recording_level_is_enough_to_identify_external_outcome():
+    """
+    recording_level remains a second canonical signal for
+    an externally sourced outcome.
+    """
+
+    action = {
+        "action_state":
+            "action_taken",
+
+        "action_type_label":
+            "Debris removal",
+
+        "follow_up_type":
+            "action",
+
+        "recording_level":
+            "externally_sourced",
+
+        "recorded_outcome":
+            (
+                "External partner confirmed the "
+                "follow-up outcome."
+            ),
+
+        "created_at":
+            NOW,
+
+        "next_follow_up_required":
+            False,
+
+        "next_follow_up_date":
+            None,
+    }
+
+    result = build_action_contribution(
+        action
+    )
+
+    assert (
+        result.contribution_type
+        == "external_outcome"
+    )
+
+    assert result.state == "reported"
+
+    assert "externally" in (
+        result.label.lower()
+    )
+
+    # The external-source rule takes precedence over the
+    # action_taken state.
+    assert result.state != "completed"
 
 
 def test_referral_status_does_not_claim_external_action():
@@ -354,7 +494,13 @@ def test_response_planned_and_complete_are_distinct():
     )
 
 
-def test_report_detail_includes_publishable_contribution():
+def test_report_detail_includes_latest_safe_contribution():
+    """
+    E6 contribution visibility is private to the submitting
+    Observer and is no longer described as a publishability
+    decision.
+    """
+
     report = the_base_report(
         status=(
             CaseStatus
@@ -373,7 +519,10 @@ def test_report_detail_includes_publishable_contribution():
             "Debris removal",
 
         "follow_up_type":
-            "intervention",
+            "action",
+
+        "recording_level":
+            "coordinator_summary",
 
         "recorded_outcome":
             "Threat material was removed.",
@@ -409,6 +558,68 @@ def test_report_detail_includes_publishable_contribution():
     assert (
         response.contribution.detail
         == "Threat material was removed."
+    )
+
+
+def test_report_detail_includes_external_outcome_as_reported_not_completed():
+    report = the_base_report()
+
+    action = {
+        "action_state":
+            "action_taken",
+
+        "action_type_label":
+            "Debris removal",
+
+        "follow_up_type":
+            "sourced_outcome",
+
+        "recording_level":
+            "externally_sourced",
+
+        "recorded_outcome":
+            (
+                "A conservation partner reported "
+                "that the material was removed."
+            ),
+
+        "created_at":
+            NOW,
+
+        "next_follow_up_required":
+            False,
+
+        "next_follow_up_date":
+            None,
+    }
+
+    response = (
+        build_observer_report_projection(
+            report=report,
+            location=None,
+            contribution=action,
+        )
+    )
+
+    assert (
+        response.contribution
+        is not None
+    )
+
+    assert (
+        response.contribution
+        .contribution_type
+        == "external_outcome"
+    )
+
+    assert (
+        response.contribution.state
+        == "reported"
+    )
+
+    assert (
+        response.contribution.state
+        != "completed"
     )
 
 
@@ -529,8 +740,6 @@ def test_timeline_includes_safe_related_incident_event():
         "of the same issue"
     )
 
-    # The safe event must contain no report reference,
-    # incident id or user identity.
     payload = (
         related_events[0]
         .model_dump()
@@ -597,6 +806,9 @@ def test_timeline_follow_up_does_not_replace_current_status():
 
         "follow_up_type":
             "monitoring",
+
+        "recording_level":
+            "coordinator_summary",
 
         "recorded_outcome":
             None,
@@ -666,6 +878,105 @@ def test_timeline_follow_up_does_not_replace_current_status():
     assert (
         follow_up_events[0].is_current
         is False
+    )
+
+
+def test_timeline_external_outcome_is_labelled_as_external():
+    report = the_base_report()
+
+    rows = [
+        {
+            "status_label":
+                "Under review",
+
+            "occurred_at":
+                datetime(
+                    2026,
+                    10,
+                    2,
+                    4,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+        }
+    ]
+
+    action = {
+        "action_state":
+            "action_taken",
+
+        "action_type_label":
+            "Debris removal",
+
+        "follow_up_type":
+            "sourced_outcome",
+
+        "recording_level":
+            "externally_sourced",
+
+        "recorded_outcome":
+            "Partner reported debris removal.",
+
+        "created_at":
+            NOW,
+
+        "next_follow_up_required":
+            False,
+
+        "next_follow_up_date":
+            None,
+    }
+
+    response = build_observer_timeline(
+        report_reference=(
+            report[
+                "report_reference"
+            ]
+        ),
+
+        current_status=(
+            report[
+                "status"
+            ]
+        ),
+
+        current_status_label=(
+            report[
+                "status_label"
+            ]
+        ),
+
+        rows=rows,
+
+        related_incident=None,
+
+        contribution=action,
+    )
+
+    follow_up_events = [
+        event
+        for event
+        in response.timeline
+        if (
+            event.event_type
+            == "follow_up"
+        )
+    ]
+
+    assert len(
+        follow_up_events
+    ) == 1
+
+    assert "externally" in (
+        follow_up_events[0]
+        .status_label
+        .lower()
+    )
+
+    assert "completed" not in (
+        follow_up_events[0]
+        .status_label
+        .lower()
     )
 
 
