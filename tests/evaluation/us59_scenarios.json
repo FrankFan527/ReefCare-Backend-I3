@@ -1,0 +1,356 @@
+{
+  "imageThreshold": 0.80,
+  "scenarios": [
+    {
+      "id": "S01",
+      "description": "Near duplicate, same photo",
+      "source": {
+        "report_id": 1001,
+        "report_reference": "EVAL-S01-A",
+        "observed_at": "2026-10-01T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "generalised_latitude": "5.904",
+        "generalised_longitude": "102.693",
+        "location_confidence_code": "within_100m",
+        "location_source_code": "manual_map_pin",
+        "estimated_depth_metres": "14",
+        "description": "Large area of pale and bleached coral around 14 metres."
+      },
+      "candidate": {
+        "report_id": 1002,
+        "report_reference": "EVAL-S01-B",
+        "observed_at": "2026-10-01T12:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "generalised_latitude": "5.904",
+        "generalised_longitude": "102.693",
+        "location_confidence_code": "within_100m",
+        "location_source_code": "manual_map_pin",
+        "estimated_depth_metres": "14",
+        "description": "Coral appears pale and bleached at approximately 14 metres."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "expected_related": true,
+      "expected_level": "high",
+      "expected_image_similar": true
+    },
+
+    {
+      "id": "S02",
+      "description": "Same incident, different similar photograph",
+      "source": {
+        "report_id": 1003,
+        "report_reference": "EVAL-S02-A",
+        "observed_at": "2026-10-02T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "generalised_latitude": "5.904",
+        "generalised_longitude": "102.693",
+        "location_confidence_code": "within_100m",
+        "location_source_code": "manual_map_pin",
+        "estimated_depth_metres": "14",
+        "description": "Bleached branching coral visible around 14 metres."
+      },
+      "candidate": {
+        "report_id": 1004,
+        "report_reference": "EVAL-S02-B",
+        "observed_at": "2026-10-03T09:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "generalised_latitude": "5.904",
+        "generalised_longitude": "102.693",
+        "location_confidence_code": "within_100m",
+        "location_source_code": "manual_map_pin",
+        "estimated_depth_metres": "15",
+        "description": "White branching coral observed at roughly fifteen metres."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/coral_bleaching2.jpg",
+      "expected_related": true,
+      "expected_level": "high",
+      "expected_image_similar": true
+    },
+
+    {
+      "id": "S03",
+      "description": "Strong match without image",
+      "source": {
+        "report_id": 1005,
+        "report_reference": "EVAL-S03-A",
+        "observed_at": "2026-10-03T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Large area of coral bleaching around 14 metres."
+      },
+      "candidate": {
+        "report_id": 1006,
+        "report_reference": "EVAL-S03-B",
+        "observed_at": "2026-10-04T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Large bleached coral area observed around 14 metres."
+      },
+      "source_image": null,
+      "candidate_image": null,
+      "expected_related": true,
+      "expected_level": "high",
+      "expected_image_similar": null
+    },
+
+    {
+      "id": "S04",
+      "description": "Same site and threat but weak temporal/text evidence",
+      "source": {
+        "report_id": 1007,
+        "report_reference": "EVAL-S04-A",
+        "observed_at": "2026-10-01T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "8",
+        "description": "Bleached branching coral."
+      },
+      "candidate": {
+        "report_id": 1008,
+        "report_reference": "EVAL-S04-B",
+        "observed_at": "2026-10-07T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "25",
+        "description": "Small isolated pale patch on a different reef formation."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/unrelated_coral.jpg",
+      "expected_related": false,
+      "expected_level": null,
+      "expected_image_similar": false
+    },
+
+    {
+      "id": "S05",
+      "description": "Outside seven day window",
+      "source": {
+        "report_id": 1009,
+        "report_reference": "EVAL-S05-A",
+        "observed_at": "2026-10-01T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral around fourteen metres."
+      },
+      "candidate": {
+        "report_id": 1010,
+        "report_reference": "EVAL-S05-B",
+        "observed_at": "2026-10-10T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral around fourteen metres."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "expected_related": false,
+      "expected_level": null,
+      "expected_image_similar": true
+    },
+
+    {
+      "id": "S06",
+      "description": "Different threat category",
+      "source": {
+        "report_id": 1011,
+        "report_reference": "EVAL-S06-A",
+        "observed_at": "2026-10-01T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral."
+      },
+      "candidate": {
+        "report_id": 1012,
+        "report_reference": "EVAL-S06-B",
+        "observed_at": "2026-10-01T11:00:00+00:00",
+        "threat_category_code": "marine_debris",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Plastic debris lying beside coral."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/debris.jpg",
+      "expected_related": false,
+      "expected_level": null,
+      "expected_image_similar": false
+    },
+
+    {
+      "id": "S07",
+      "description": "Different site and area",
+      "source": {
+        "report_id": 1013,
+        "report_reference": "EVAL-S07-A",
+        "observed_at": "2026-10-01T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral."
+      },
+      "candidate": {
+        "report_id": 1014,
+        "report_reference": "EVAL-S07-B",
+        "observed_at": "2026-10-01T11:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 99,
+        "dive_site_name": "Different Site",
+        "public_area_label": "Redang",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "expected_related": false,
+      "expected_level": null,
+      "expected_image_similar": true
+    },
+
+    {
+      "id": "S08",
+      "description": "Same site with uncertain pins far apart",
+      "source": {
+        "report_id": 1015,
+        "report_reference": "EVAL-S08-A",
+        "observed_at": "2026-10-01T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "generalised_latitude": "5.881",
+        "generalised_longitude": "102.712",
+        "location_confidence_code": "within_1km",
+        "location_source_code": "manual_map_pin",
+        "estimated_depth_metres": "14",
+        "description": "Coral bleaching around 14 metres."
+      },
+      "candidate": {
+        "report_id": 1016,
+        "report_reference": "EVAL-S08-B",
+        "observed_at": "2026-10-01T10:30:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "generalised_latitude": "5.904",
+        "generalised_longitude": "102.693",
+        "location_confidence_code": "within_1km",
+        "location_source_code": "manual_map_pin",
+        "estimated_depth_metres": "14",
+        "description": "Seems like coral bleaching around 14 metres."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/coral_bleaching2.jpg",
+      "expected_related": true,
+      "expected_level": "medium",
+      "expected_image_similar": true
+    },
+
+    {
+      "id": "S09",
+      "description": "Same named site but contradictory exact pins",
+      "source": {
+        "report_id": 1017,
+        "report_reference": "EVAL-S09-A",
+        "observed_at": "2026-10-01T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "generalised_latitude": "2.800",
+        "generalised_longitude": "104.100",
+        "location_confidence_code": "exact",
+        "location_source_code": "manual_map_pin",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral."
+      },
+      "candidate": {
+        "report_id": 1018,
+        "report_reference": "EVAL-S09-B",
+        "observed_at": "2026-10-01T10:30:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "generalised_latitude": "3.800",
+        "generalised_longitude": "104.100",
+        "location_confidence_code": "exact",
+        "location_source_code": "manual_map_pin",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "expected_related": false,
+      "expected_level": null,
+      "expected_image_similar": true
+    },
+
+    {
+      "id": "S10",
+      "description": "Image similarity test with unrelated photo",
+      "source": {
+        "report_id": 1019,
+        "report_reference": "EVAL-S10-A",
+        "observed_at": "2026-10-01T10:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral around 14 metres."
+      },
+      "candidate": {
+        "report_id": 1020,
+        "report_reference": "EVAL-S10-B",
+        "observed_at": "2026-10-01T11:00:00+00:00",
+        "threat_category_code": "coral_bleaching",
+        "dive_site_id": 15,
+        "dive_site_name": "Vietnamese Wreck",
+        "public_area_label": "Perhentian Islands",
+        "estimated_depth_metres": "14",
+        "description": "Bleached coral around 14 metres."
+      },
+      "source_image": "tests/evaluation/test_images/coral_bleaching1.jpg",
+      "candidate_image": "tests/evaluation/test_images/completely_different.jpg",
+      "expected_related": true,
+      "expected_level": "low",
+      "expected_image_similar": false
+    }
+  ]
+}
