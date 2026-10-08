@@ -172,3 +172,48 @@ async def get_historical_condition_coverage(
         return None
 
     return dict(row)
+
+async def list_seasonal_references(
+    db: AsyncSession,
+    area_code: str,
+) -> list[dict]:
+    """
+    Return the reviewed US9.1 seasonal reference rows for
+    one planning area, one row per calendar month at most.
+
+    Months without a row stay unreviewed in the service.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                calendar_month,
+                season_label,
+                typical_conditions,
+                favourability,
+                basis_source,
+                source_url,
+                last_reviewed_at
+
+            FROM seasonal_condition_reference
+
+            WHERE
+                area_code = :area_code
+
+            ORDER BY
+                calendar_month
+            """
+        ),
+        {
+            "area_code":
+                area_code,
+        },
+    )
+
+    return [
+        dict(row)
+
+        for row
+        in result.mappings().all()
+    ]
