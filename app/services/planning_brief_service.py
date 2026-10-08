@@ -16,7 +16,7 @@
 # US9.3 live site assessment
 #       |
 #       v
-# public-safe ReefCare activity
+# E8 shared public-safe site context
 #       |
 #       v
 # constrained Gemini summary
@@ -57,13 +57,13 @@ from app.schemas.planning import (
 from app.services.planning_service import (
     compare_sites_for_date,
 )
-from app.services.public_service import (
-    get_public_activity,
+from app.services.public_context_service import (
+    get_public_site_context,
 )
 
 
 MAX_PUBLIC_ACTIVITY_ITEMS: int = 5
-
+MAX_PUBLIC_THREAT_ITEMS: int = 5
 MAX_BRIEF_LENGTH: int = 3000
 
 
@@ -100,6 +100,7 @@ def _provider_payload(
     Build a tightly constrained Gemini request.
 
     All factual input has already been resolved by ReefCare.
+
     The model may explain those facts but may not add new
     environmental, ecological or safety claims.
     """
@@ -119,15 +120,20 @@ def _provider_payload(
             "give permission or clearance to dive. "
             "Planning bands are contextual indicators, "
             "not safety assessments. Public ReefCare "
-            "activity is historical/contextual and must "
-            "not be presented as the current condition "
-            "of the reef. If no public activity is "
+            "context is historical and contextual and "
+            "must not be presented as the current "
+            "condition of the reef. Accepted observations "
+            "describe reviewed ReefCare records, not a "
+            "complete survey of the site. Reports still "
+            "under review must not be treated as confirmed "
+            "threats. If no public ReefCare context is "
             "available, do not infer that the reef is "
-            "healthy or unaffected. Write plain English "
-            "for a recreational diver. Produce at most "
-            "two short paragraphs. Do not use headings, "
-            "bullet points, markdown, or disclaimers that "
-            "introduce facts not present in the input."
+            "healthy, unaffected, or free of threats. "
+            "Write plain English for a recreational diver. "
+            "Produce at most two short paragraphs. "
+            "Do not use headings, bullet points, markdown, "
+            "or disclaimers that introduce facts not "
+            "present in the input."
         ),
 
         "input":
@@ -314,58 +320,99 @@ def _normalise_brief_text(
     return cleaned
 
 
+def _build_public_threats(
+    public_context,
+) -> list[dict]:
+    """
+    Convert only E8-approved threat summaries into AI facts.
+
+    These summaries contain no report reference, Observer
+    identity, evidence, description, precise coordinates,
+    Coordinator identity or internal notes.
+    """
+
+    return [
+        {
+            "threatCategoryCode":
+                threat.threat_category_code,
+
+            "threatCategoryLabel":
+                threat.threat_category_label,
+
+            "acceptedReportCount":
+                threat.accepted_report_count,
+
+            "mostRecentMonth":
+                threat.most_recent_month,
+        }
+        for threat
+        in public_context.threats[
+            :MAX_PUBLIC_THREAT_ITEMS
+        ]
+    ]
+
+
+def _build_public_activity(
+    public_context,
+) -> list[dict]:
+    """
+    Convert only E8-approved public activity into AI facts.
+    """
+
+    return [
+        {
+            "activityType":
+                item.activity_type,
+
+            "title":
+                item.title,
+
+            "summary":
+                item.summary,
+
+            "activityDate":
+                item.activity_date,
+
+            "sourceLabel":
+                item.source_label,
+        }
+        for item
+        in public_context.activity[
+            :MAX_PUBLIC_ACTIVITY_ITEMS
+        ]
+    ]
+
+
 def _build_facts(
     *,
     planning_context,
     site_result,
-    public_activity: dict,
+    public_context,
     planned_date: date,
 ) -> dict:
     """
     Construct the only facts Gemini is allowed to use.
 
+    E8 is the single authority for ReefCare public-safe
+    site context.
+
     No coordinates, Observer identity, private reports,
-    evidence files or restricted case information enter the
-    prompt.
+    evidence files, report descriptions, Coordinator
+    identity, internal notes or restricted case information
+    enter the prompt.
     """
 
-    public_items = []
-
-    for item in (
-        public_activity[
-            "items"
-        ][
-            :MAX_PUBLIC_ACTIVITY_ITEMS
-        ]
-    ):
-        public_items.append(
-            {
-                "activityType":
-                    item[
-                        "activity_type"
-                    ],
-
-                "title":
-                    item[
-                        "title"
-                    ],
-
-                "summary":
-                    item[
-                        "summary"
-                    ],
-
-                "activityDate":
-                    item[
-                        "activity_date"
-                    ],
-
-                "sourceLabel":
-                    item[
-                        "source_label"
-                    ],
-            }
+    public_threats = (
+        _build_public_threats(
+            public_context
         )
+    )
+
+    public_activity = (
+        _build_public_activity(
+            public_context
+        )
+    )
 
     return {
         "site": {
@@ -414,18 +461,32 @@ def _build_facts(
         },
 
         "publicReefContext": {
-            "hasActivity":
-                public_activity[
-                    "has_activity"
-                ],
+            "state":
+                public_context
+                .state
+                .value,
 
             "message":
-                public_activity[
-                    "message"
-                ],
+                public_context
+                .message,
 
-            "items":
-                public_items,
+            "assessmentSummary": {
+                "acceptedObservations":
+                    public_context
+                    .assessment_summary
+                    .accepted_observations,
+
+                "observationsUnderReview":
+                    public_context
+                    .assessment_summary
+                    .observations_under_review,
+            },
+
+            "threats":
+                public_threats,
+
+            "activity":
+                public_activity,
         },
     }
 
@@ -439,8 +500,16 @@ async def generate_planning_brief(
     """
     Generate one optional public planning brief.
 
-    The request contains only site/date intent. All factual
-    content is independently retrieved by the backend.
+    The request contains only site/date intent.
+
+    All factual content is independently retrieved by the
+    backend.
+
+    Environmental facts come from US9.3 deterministic/live
+    planning assessment.
+
+    ReefCare history/context comes only from the shared E8
+    public-safe boundary.
 
     Missing/out-of-horizon conditions and any Gemini
     provider failure return the normal unavailable shape,
@@ -495,7 +564,7 @@ async def generate_planning_brief(
         )
 
     # No AI prose is generated when ReefCare itself has no
-    # factual assessment to summarise.
+    # factual environmental assessment to summarise.
     if selected_site.band in {
         PlanningBand.UNAVAILABLE,
         PlanningBand.OUT_OF_HORIZON,
@@ -506,8 +575,14 @@ async def generate_planning_brief(
             planned_date=planned_date,
         )
 
-    public_activity = (
-        await get_public_activity(
+    # E8 is the single source of public-safe ReefCare site
+    # context used by both E2 and E9.
+    #
+    # This service already applies all publication and
+    # privacy eligibility rules before anything reaches the
+    # Planning Brief prompt.
+    public_context = (
+        await get_public_site_context(
             db=db,
             dive_site_id=site_id,
         )
@@ -522,8 +597,8 @@ async def generate_planning_brief(
             selected_site
         ),
 
-        public_activity=(
-            public_activity
+        public_context=(
+            public_context
         ),
 
         planned_date=(

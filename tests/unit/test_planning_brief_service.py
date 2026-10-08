@@ -18,6 +18,13 @@ from app.schemas.planning import (
     SiteComparisonItem,
     SiteComparisonResponse,
 )
+from app.schemas.public_context import (
+    PublicActivityEntry,
+    PublicAssessmentSummary,
+    PublicContextState,
+    PublicSiteContextResponse,
+    PublicThreatSummary,
+)
 from app.services import (
     planning_brief_service
     as service,
@@ -102,42 +109,110 @@ def site_comparison(
     )
 
 
-def public_activity():
-    return {
-        "dive_site_id": 23,
+def public_context():
+    return PublicSiteContextResponse(
+        dive_site_id=23,
 
-        "dive_site_name":
-            "Mini Mount",
+        site_name="Mini Mount",
 
-        "public_area_label":
-            "Tioman Island",
+        public_area_label="Tioman Island",
 
-        "has_activity":
-            True,
+        state=(
+            PublicContextState.AVAILABLE
+        ),
 
-        "items": [
-            {
-                "activity_id": 9,
-                "activity_type":
-                    "debris_cleanup",
-                "title":
-                    "Debris collection at Mini Mount",
-                "summary":
-                    "Discarded material was collected.",
-                "activity_date":
-                    date(
-                        2026,
-                        7,
-                        24,
-                    ),
-                "source_label":
-                    "ReefCare MY demonstration content",
-            }
+        message=(
+            "ReefCare information for this site covers "
+            "1 reviewed threat category and "
+            "1 published conservation activity record."
+        ),
+
+        assessment_summary=(
+            PublicAssessmentSummary(
+                accepted_observations=2,
+                observations_under_review=1,
+            )
+        ),
+
+        threats=[
+            PublicThreatSummary(
+                threat_category_code=(
+                    "marine_debris"
+                ),
+
+                threat_category_label=(
+                    "Marine debris"
+                ),
+
+                accepted_report_count=2,
+
+                most_recent_month=(
+                    "2026-09"
+                ),
+            )
         ],
 
-        "message":
-            "Public-safe ReefCare activity is available for this site.",
-    }
+        activity=[
+            PublicActivityEntry(
+                activity_id=9,
+
+                activity_type=(
+                    "debris_cleanup"
+                ),
+
+                title=(
+                    "Debris collection at Mini Mount"
+                ),
+
+                summary=(
+                    "Discarded material was collected."
+                ),
+
+                activity_date=date(
+                    2026,
+                    7,
+                    24,
+                ),
+
+                source_label=(
+                    "ReefCare MY demonstration content"
+                ),
+            )
+        ],
+    )
+
+
+def no_public_context():
+    return PublicSiteContextResponse(
+        dive_site_id=23,
+
+        site_name="Mini Mount",
+
+        public_area_label="Tioman Island",
+
+        state=(
+            PublicContextState
+            .NO_PUBLIC_CONTEXT
+        ),
+
+        message=(
+            "No reviewed ReefCare information is "
+            "currently available for this site. "
+            "This is not a statement about the "
+            "condition of the reef."
+        ),
+
+        assessment_summary=(
+            PublicAssessmentSummary(
+                accepted_observations=0,
+                observations_under_review=0,
+            )
+        ),
+
+        threats=[],
+
+        activity=[],
+    )
 
 
 @pytest.mark.asyncio
@@ -192,12 +267,12 @@ async def test_out_of_horizon_does_not_call_ai(
         ),
     )
 
-    public_mock = AsyncMock()
+    public_context_mock = AsyncMock()
 
     monkeypatch.setattr(
         service,
-        "get_public_activity",
-        public_mock,
+        "get_public_site_context",
+        public_context_mock,
     )
 
     provider_mock = AsyncMock()
@@ -223,9 +298,12 @@ async def test_out_of_horizon_does_not_call_ai(
     )
 
     assert result.text is None
+
     assert result.generated_at is None
 
-    public_mock.assert_not_awaited()
+    public_context_mock.assert_not_awaited()
+
+    provider_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -257,12 +335,20 @@ async def test_not_assessable_does_not_call_public_context_or_ai(
         ),
     )
 
-    public_mock = AsyncMock()
+    public_context_mock = AsyncMock()
 
     monkeypatch.setattr(
         service,
-        "get_public_activity",
-        public_mock,
+        "get_public_site_context",
+        public_context_mock,
+    )
+
+    provider_mock = AsyncMock()
+
+    monkeypatch.setattr(
+        service,
+        "_post_json",
+        provider_mock,
     )
 
     result = (
@@ -279,7 +365,11 @@ async def test_not_assessable_does_not_call_public_context_or_ai(
         == "unavailable"
     )
 
-    public_mock.assert_not_awaited()
+    assert result.text is None
+
+    public_context_mock.assert_not_awaited()
+
+    provider_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -308,10 +398,10 @@ async def test_missing_ai_configuration_is_non_blocking(
 
     monkeypatch.setattr(
         service,
-        "get_public_activity",
+        "get_public_site_context",
         AsyncMock(
             return_value=(
-                public_activity()
+                public_context()
             )
         ),
     )
@@ -337,6 +427,8 @@ async def test_missing_ai_configuration_is_non_blocking(
     )
 
     assert result.text is None
+
+    assert result.generated_at is None
 
 
 @pytest.mark.asyncio
@@ -365,15 +457,16 @@ async def test_generated_brief_uses_backend_resolved_facts(
 
     monkeypatch.setattr(
         service,
-        "get_public_activity",
+        "get_public_site_context",
         AsyncMock(
             return_value=(
-                public_activity()
+                public_context()
             )
         ),
     )
 
     class FakeSecret:
+
         def get_secret_value(
             self,
         ):
@@ -399,9 +492,9 @@ async def test_generated_brief_uses_backend_resolved_facts(
                 "Conditions are currently classified "
                 "as more favourable under the ReefCare "
                 "planning rule.\n\n"
-                "A previous public ReefCare activity "
-                "record notes debris collection at this "
-                "site."
+                "Reviewed ReefCare context includes "
+                "marine debris observations and a "
+                "previous debris collection activity."
             )
         }
 
@@ -454,6 +547,21 @@ async def test_generated_brief_uses_backend_resolved_facts(
     )
 
     assert (
+        "marine_debris"
+        in provider_input
+    )
+
+    assert (
+        "acceptedObservations"
+        in provider_input
+    )
+
+    assert (
+        "observationsUnderReview"
+        in provider_input
+    )
+
+    assert (
         "0.6"
         in provider_input
     )
@@ -485,15 +593,16 @@ async def test_provider_failure_returns_unavailable(
 
     monkeypatch.setattr(
         service,
-        "get_public_activity",
+        "get_public_site_context",
         AsyncMock(
             return_value=(
-                public_activity()
+                public_context()
             )
         ),
     )
 
     class FakeSecret:
+
         def get_secret_value(
             self,
         ):
@@ -540,6 +649,113 @@ async def test_provider_failure_returns_unavailable(
     )
 
 
+@pytest.mark.asyncio
+async def test_no_public_context_is_still_safe_for_ai(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        service,
+        "get_planning_context_for_site",
+        AsyncMock(
+            return_value=(
+                planning_context()
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        service,
+        "compare_sites_for_date",
+        AsyncMock(
+            return_value=(
+                site_comparison()
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        service,
+        "get_public_site_context",
+        AsyncMock(
+            return_value=(
+                no_public_context()
+            )
+        ),
+    )
+
+    class FakeSecret:
+
+        def get_secret_value(
+            self,
+        ):
+            return "test-key"
+
+    monkeypatch.setattr(
+        service.settings,
+        "gemini_api_key",
+        FakeSecret(),
+    )
+
+    captured_payload = {}
+
+    def fake_post_json(
+        payload,
+    ):
+        captured_payload.update(
+            payload
+        )
+
+        return {
+            "output_text": (
+                "No reviewed ReefCare site context "
+                "is currently available. Current "
+                "planning conditions are described "
+                "only by the supplied forecast."
+            )
+        }
+
+    monkeypatch.setattr(
+        service,
+        "_post_json",
+        fake_post_json,
+    )
+
+    result = (
+        await service
+        .generate_planning_brief(
+            db=object(),
+            site_id=23,
+            planned_date=PLANNED_DATE,
+        )
+    )
+
+    assert (
+        result.status
+        == "generated"
+    )
+
+    provider_input = (
+        captured_payload[
+            "input"
+        ]
+    )
+
+    assert (
+        "no_public_context"
+        in provider_input
+    )
+
+    assert (
+        "\"threats\": []"
+        in provider_input
+    )
+
+    assert (
+        "\"activity\": []"
+        in provider_input
+    )
+
+
 def test_prompt_does_not_contain_coordinates_or_private_fields():
     facts = service._build_facts(
         planning_context=(
@@ -551,8 +767,8 @@ def test_prompt_does_not_contain_coordinates_or_private_fields():
             .sites[0]
         ),
 
-        public_activity=(
-            public_activity()
+        public_context=(
+            public_context()
         ),
 
         planned_date=(
@@ -564,22 +780,23 @@ def test_prompt_does_not_contain_coordinates_or_private_fields():
         facts
     ).lower()
 
-    assert (
-        "latitude"
-        not in encoded
-    )
+    forbidden_terms = [
+        "latitude",
+        "longitude",
+        "observer",
+        "observer_id",
+        "report_reference",
+        "description",
+        "file_reference",
+        "evidence",
+        "claimed_by_user_id",
+        "coordinator",
+        "decision_note",
+        "closure_reason",
+    ]
 
-    assert (
-        "longitude"
-        not in encoded
-    )
-
-    assert (
-        "observer"
-        not in encoded
-    )
-
-    assert (
-        "file_reference"
-        not in encoded
-    )
+    for term in forbidden_terms:
+        assert (
+            term
+            not in encoded
+        )
