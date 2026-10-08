@@ -157,7 +157,10 @@ async def list_publishable_activity(
     one eligibility rule either way, which is what US8.2 AC5 asks for.
 
     The follow-up text published is the recorded outcome, never the internal
-    notes, and no report reference travels with it.
+    notes, and no report reference travels with it. Only completed work is
+    published (a taken action or an externally reported outcome), and the
+    source label says who the record speaks for rather than the free-text
+    responsible team.
     """
 
     the_result = await db.execute(
@@ -187,7 +190,13 @@ async def list_publishable_activity(
                     at.label AS title,
                     ca.recorded_outcome AS summary,
                     ca.action_date AS activity_date,
-                    coalesce(ca.responsible_team, 'ReefCare MY') AS source_label,
+                    -- who the record speaks for, never the free-text team
+                    -- name, which can identify a person or an organisation
+                    CASE ca.recording_level
+                        WHEN 'externally_sourced' THEN 'Reported by an external organisation'
+                        WHEN 'responder_record'   THEN 'Recorded by a conservation responder'
+                        ELSE 'Recorded by ReefCare MY'
+                    END AS source_label,
                     50 AS display_order,
                     ca.case_action_id AS tiebreak
                 FROM case_action AS ca
@@ -199,6 +208,7 @@ async def list_publishable_activity(
                   AND r.deleted_at IS NULL
                   AND ca.is_publishable IS TRUE
                   AND NOT ca.is_demonstration
+                  AND ca.action_state IN ('action_taken', 'outcome_recorded')
                   AND ca.recorded_outcome IS NOT NULL
                   AND NOT EXISTS (
                         SELECT 1 FROM case_action AS later

@@ -16,6 +16,7 @@ from app.schemas.follow_up import (
     FollowUpCorrection,
     FollowUpCreate,
     FollowUpListResponse,
+    FollowUpPublication,
     FollowUpResponse,
     MonitoringConditionOption,
     MonitoringCreate,
@@ -145,6 +146,35 @@ async def correct_follow_up(
     """
 
     return await follow_up_service.correct_follow_up(
+        db=db,
+        report_reference=report_reference,
+        case_action_id=case_action_id,
+        coordinator_id=current_coordinator["user_id"],
+        the_request=the_request,
+    )
+
+
+@router.post(
+    "/reports/{report_reference}/follow-ups/{case_action_id}/publication",
+    response_model=FollowUpResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def set_follow_up_publication(
+    report_reference: str,
+    case_action_id: int,
+    the_request: FollowUpPublication,
+    current_coordinator: CurrentCoordinator,
+    db: DatabaseSession,
+):
+    """
+    E8 publication. Publish or withdraw a follow-up from public site activity.
+
+    Owner-only. Only a taken action or an externally reported outcome with a
+    recorded outcome can be published. Returns 201 because, like a
+    correction, a superseding copy of the record is appended.
+    """
+
+    return await follow_up_service.set_follow_up_publication(
         db=db,
         report_reference=report_reference,
         case_action_id=case_action_id,
