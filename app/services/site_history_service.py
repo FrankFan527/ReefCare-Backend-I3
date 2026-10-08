@@ -75,6 +75,11 @@ def to_observation_item(
 ) -> SiteHistoryItem:
     the_state = AssessmentState(the_row["assessment_state"])
 
+    # a closed case shows which closed state it is in (QA-E8-01)
+    the_label = THE_ASSESSMENT_STATE_LABELS[the_state]
+    if the_state == AssessmentState.CLOSED and the_row.get("case_status_label"):
+        the_label = the_row["case_status_label"]
+
     return SiteHistoryItem(
         record_type=SiteHistoryRecordType.OBSERVATION,
         occurred_at=the_row["observed_at"],
@@ -82,7 +87,7 @@ def to_observation_item(
         threat_category_code=the_row["threat_category_code"],
         threat_category_label=the_row["threat_category_label"],
         assessment_state=the_state,
-        assessment_state_label=THE_ASSESSMENT_STATE_LABELS[the_state],
+        assessment_state_label=the_label,
         # US1.3 AC2: the reference is only shown for a case this Coordinator
         # owns. The entry itself still appears, so the site history is honest
         # about work other Coordinators are doing.
