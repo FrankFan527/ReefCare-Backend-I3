@@ -291,3 +291,115 @@ async def test_a_monitoring_visit_is_not_corrected_in_place(monkeypatch):
             AsyncMock(), "RC-0001", 12, 42,
             FollowUpCorrection(correction_reason="wrong date"),
         )
+
+
+# ---------------------------------------------------------------------------
+# QA-E7-01 — a correction is not a new action
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "the_status",
+    ["response_planned", "response_complete", "closed_resolved", "closed_logged"],
+)
+def test_unchanged_state_correction_never_moves_the_case(the_status):
+    # correcting the team or date on a planned action after the case moved on
+    assert the_service.correction_moves_case(
+        "action", "action_planned", "action_planned", the_status,
+    ) is False
+
+
+def test_correcting_planned_to_taken_moves_the_case_forward():
+    assert the_service.correction_moves_case(
+        "action", "action_planned", "action_taken", "response_planned",
+    ) is True
+
+
+def test_correcting_planned_to_taken_when_already_complete_does_not_move_it():
+    assert the_service.correction_moves_case(
+        "action", "action_planned", "action_taken", "response_complete",
+    ) is False
+
+
+def test_a_taken_action_cannot_be_corrected_back_to_planned():
+    with pytest.raises(WorkflowError):
+        the_service.correction_moves_case(
+            "action", "action_taken", "action_planned", "response_complete",
+        )
+
+
+def test_a_sourced_outcome_correction_never_moves_the_case():
+    assert the_service.correction_moves_case(
+        "sourced_outcome", "outcome_recorded", "outcome_recorded", "referred",
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_planned_action_can_be_corrected_after_the_action_was_taken(monkeypatch):
+    # the exact QA-E7-01 scenario: the case is response_complete and the
+    # Coordinator corrects the earlier planned record without changing state
+    monkeypatch.setattr(
+        the_service, "load_owned_case",
+        AsyncMock(return_value={"status_code": "response_complete"}),
+    )
+    monkeypatch.setattr(
+        the_service.the_repository, "get_follow_up",
+        AsyncMock(return_value={
+            "follow_up_type": "action",
+            "follow_up_state": "action_planned",
+            "superseded_by_case_action_id": None,
+            "action_date": THE_TODAY,
+            "action_type_code": "gear_removal",
+            "notes": None,
+            "recording_level": "coordinator_summary",
+            "responsible_team": "Old team",
+            "source_reference": None,
+            "observations": None,
+            "recorded_outcome": None,
+        }),
+    )
+    monkeypatch.setattr(
+        the_service, "_load_selectable_action_type",
+        AsyncMock(return_value={"action_type_id": 1}),
+    )
+    the_open_event = AsyncMock(return_value=501)
+    monkeypatch.setattr(the_service, "_open_history_event", the_open_event)
+    the_save = AsyncMock(return_value={"case_action_id": 2})
+    monkeypatch.setattr(the_service.the_repository, "save_follow_up", the_save)
+    monkeypatch.setattr(the_service, "to_follow_up_response", lambda the_row: the_row)
+
+    the_result = await the_service.correct_follow_up(
+        AsyncMock(), "RC-0001", 12, 42,
+        FollowUpCorrection(responsible_team="Marine park team", correction_reason="wrong team"),
+    )
+
+    assert the_result == {"case_action_id": 2}
+    # the history event does not try to move the case
+    assert the_open_event.await_args.kwargs["the_target_status"] is None
+    assert the_save.await_args.kwargs["supersedes_case_action_id"] == 12
+    assert the_save.await_args.kwargs["follow_up_state"] == "action_planned"
+
+
+@pytest.mark.asyncio
+async def test_state_cannot_be_corrected_on_a_sourced_outcome(monkeypatch):
+    monkeypatch.setattr(
+        the_service, "load_owned_case",
+        AsyncMock(return_value={"status_code": "referred"}),
+    )
+    monkeypatch.setattr(
+        the_service.the_repository, "get_follow_up",
+        AsyncMock(return_value={
+            "follow_up_type": "sourced_outcome",
+            "follow_up_state": "outcome_recorded",
+            "superseded_by_case_action_id": None,
+            "action_date": THE_TODAY,
+        }),
+    )
+
+    with pytest.raises(DomainValidationError):
+        await the_service.correct_follow_up(
+            AsyncMock(), "RC-0001", 12, 42,
+            FollowUpCorrection(
+                follow_up_state=FollowUpState.ACTION_TAKEN,
+                correction_reason="wrong state",
+            ),
+        )

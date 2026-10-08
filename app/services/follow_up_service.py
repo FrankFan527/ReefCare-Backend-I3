@@ -135,6 +135,45 @@ def assert_action_state_fits_case(
         )
 
 
+def correction_moves_case(
+    the_follow_up_type: str,
+    the_original_state: str,
+    the_corrected_state: str,
+    the_status_code: str,
+) -> bool:
+    """
+    US7.1 AC8. A correction restates facts about an existing record; it is not
+    a new action. So the new-action status rule only applies when the
+    correction actually changes an action's state, and an unchanged state is
+    accepted whatever the case has moved on to since (QA-E7-01).
+
+    Returns True when the corrected state should move the case forward.
+    """
+
+    if (
+        the_follow_up_type != FollowUpType.ACTION.value
+        or the_corrected_state == the_original_state
+    ):
+        return False
+
+    # the case cannot be moved backwards by a correction
+    if (
+        the_original_state == FollowUpState.ACTION_TAKEN.value
+        and the_corrected_state == FollowUpState.ACTION_PLANNED.value
+    ):
+        raise WorkflowError(
+            "A taken action cannot be corrected back to planned. "
+            "Record a new planned action instead."
+        )
+
+    assert_action_state_fits_case(
+        the_follow_up_state=the_corrected_state,
+        the_status_code=the_status_code,
+    )
+
+    return THE_STATUS_FOR_ACTION_STATE.get(the_corrected_state) != the_status_code
+
+
 def assert_monitoring_fits_case(
     the_status_code: str,
 ) -> None:
@@ -495,11 +534,21 @@ async def correct_follow_up(
             "actionDate is required when followUpState is action_taken"
         )
 
-    if the_original["follow_up_type"] == FollowUpType.ACTION.value:
-        assert_action_state_fits_case(
-            the_follow_up_state=the_state,
-            the_status_code=the_case["status_code"],
+    # only an action has a state a Coordinator may restate
+    if (
+        the_original["follow_up_type"] != FollowUpType.ACTION.value
+        and the_state != the_original["follow_up_state"]
+    ):
+        raise DomainValidationError(
+            "followUpState can only be corrected on an action record"
         )
+
+    the_case_moves = correction_moves_case(
+        the_follow_up_type=the_original["follow_up_type"],
+        the_original_state=the_original["follow_up_state"],
+        the_corrected_state=the_state,
+        the_status_code=the_case["status_code"],
+    )
 
     the_action_type = await _load_selectable_action_type(
         db=db,
@@ -510,11 +559,6 @@ async def correct_follow_up(
     the_correction_note = (
         f"{the_note or ''}\n\nCorrection: {the_request.correction_reason.strip()}"
     ).strip()
-
-    the_case_moves = (
-        the_original["follow_up_type"] == FollowUpType.ACTION.value
-        and THE_STATUS_FOR_ACTION_STATE.get(the_state) != the_case["status_code"]
-    )
 
     try:
         the_case_event_id = await _open_history_event(

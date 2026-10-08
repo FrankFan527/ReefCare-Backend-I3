@@ -47,6 +47,7 @@ class AssessmentState(str, Enum):
     UNDER_REVIEW = "under_review"
     EVIDENCE_ACCEPTED = "evidence_accepted"
     NOT_SUBSTANTIATED = "not_substantiated"
+    CLOSED = "closed"
     CLOSED_WITHOUT_ASSESSMENT = "closed_without_assessment"
 
 
@@ -65,6 +66,10 @@ THE_ASSESSMENT_STATE_LABELS: dict[AssessmentState, str] = {
         "Evidence accepted",
     AssessmentState.NOT_SUBSTANTIATED:
         "Could not be confirmed from the evidence provided",
+    # fallback only: a closed case normally carries its own closed label,
+    # e.g. "Closed — No Action Required"
+    AssessmentState.CLOSED:
+        "Closed",
     AssessmentState.CLOSED_WITHOUT_ASSESSMENT:
         "Closed without a recorded evidence assessment",
 }
