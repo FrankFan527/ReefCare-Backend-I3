@@ -65,6 +65,9 @@ async def list_site_observations(
     Eligible observations at one site, with the assessment state each one has
     actually reached.
 
+    A case in a terminal status always reports a closed state: not
+    substantiated, closed after assessment, or closed without assessment.
+
     The decision used is the most recent one that answered the credibility
     question, which is what Iteration 2 records when a Coordinator accepts or
     rejects evidence. Where no such decision exists the status grouping is
@@ -86,10 +89,22 @@ async def list_site_observations(
                 r.submitted_at,
 
                 CASE
+                    -- QA-E8-01: a closed case reports its closed state, never
+                    -- "Evidence accepted", even if its evidence was accepted
+                    -- before it was closed
+                    WHEN cs.is_terminal
+                         AND (assessed.observation_credible IS FALSE
+                              OR cs.code = 'closed_not_substantiated')
+                                                                THEN 'not_substantiated'
+                    WHEN cs.is_terminal
+                         AND assessed.observation_credible IS TRUE THEN 'closed'
                     WHEN assessed.observation_credible IS TRUE  THEN 'evidence_accepted'
                     WHEN assessed.observation_credible IS FALSE THEN 'not_substantiated'
                     ELSE {THE_STATUS_TO_ASSESSMENT_STATE}
-                END AS assessment_state
+                END AS assessment_state,
+
+                -- the Coordinator-facing wording of the closed state
+                cs.internal_label AS case_status_label
 
             FROM report AS r
             JOIN dive_session AS dsn   ON dsn.dive_session_id = r.dive_session_id
