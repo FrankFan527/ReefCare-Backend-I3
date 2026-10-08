@@ -21,6 +21,7 @@ from app.core.exceptions import (
 from app.schemas.follow_up import (
     FollowUpCorrection,
     FollowUpCreate,
+    FollowUpPublication,
     FollowUpState,
     FollowUpType,
     MonitoringCreate,
@@ -403,3 +404,156 @@ async def test_state_cannot_be_corrected_on_a_sourced_outcome(monkeypatch):
                 correction_reason="wrong state",
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# E8 publication — owner-only, completed work only, append-only
+# ---------------------------------------------------------------------------
+
+def make_record(**the_overrides) -> dict:
+    the_record = {
+        "follow_up_type": "action",
+        "follow_up_state": "action_taken",
+        "recorded_outcome": "Ghost net removed by the park team",
+        "is_publishable": False,
+        "is_demonstration": False,
+        "superseded_by_case_action_id": None,
+    }
+    the_record.update(the_overrides)
+    return the_record
+
+
+@pytest.mark.parametrize("the_state", ["action_taken", "outcome_recorded"])
+def test_completed_work_with_an_outcome_can_be_published(the_state):
+    the_service.assert_publication_change_allowed(
+        make_record(follow_up_state=the_state), True,
+    )
+
+
+@pytest.mark.parametrize("the_state", ["action_planned", "monitoring_recorded"])
+def test_planned_actions_and_monitoring_stay_private(the_state):
+    with pytest.raises(WorkflowError):
+        the_service.assert_publication_change_allowed(
+            make_record(follow_up_state=the_state), True,
+        )
+
+
+@pytest.mark.parametrize("the_outcome", [None, "", "   "])
+def test_nothing_is_published_without_a_recorded_outcome(the_outcome):
+    with pytest.raises(WorkflowError):
+        the_service.assert_publication_change_allowed(
+            make_record(recorded_outcome=the_outcome), True,
+        )
+
+
+def test_demonstration_records_are_never_published():
+    with pytest.raises(WorkflowError):
+        the_service.assert_publication_change_allowed(
+            make_record(is_demonstration=True), True,
+        )
+
+
+def test_a_superseded_version_cannot_be_published_or_withdrawn():
+    with pytest.raises(WorkflowError):
+        the_service.assert_publication_change_allowed(
+            make_record(superseded_by_case_action_id=99), True,
+        )
+    with pytest.raises(WorkflowError):
+        the_service.assert_publication_change_allowed(
+            make_record(superseded_by_case_action_id=99, is_publishable=True), False,
+        )
+
+
+def test_publishing_twice_or_withdrawing_an_unpublished_record_is_refused():
+    with pytest.raises(WorkflowError):
+        the_service.assert_publication_change_allowed(make_record(is_publishable=True), True)
+    with pytest.raises(WorkflowError):
+        the_service.assert_publication_change_allowed(make_record(is_publishable=False), False)
+
+
+def test_a_published_record_can_be_withdrawn():
+    the_service.assert_publication_change_allowed(make_record(is_publishable=True), False)
+
+
+@pytest.mark.asyncio
+async def test_publication_appends_a_published_copy_without_moving_the_case(monkeypatch):
+    monkeypatch.setattr(
+        the_service, "load_owned_case",
+        AsyncMock(return_value={"status_code": "response_complete"}),
+    )
+    monkeypatch.setattr(
+        the_service.the_repository, "get_follow_up",
+        AsyncMock(return_value={
+            **make_record(),
+            "status_code": "response_complete",
+            "action_type_code": "gear_removal",
+            "recording_level": "coordinator_summary",
+            "action_date": THE_TODAY,
+            "responsible_team": "Reef team",
+            "source_reference": None,
+            "observations": None,
+            "notes": "internal note",
+            "next_follow_up_required": False,
+            "next_follow_up_date": None,
+        }),
+    )
+    monkeypatch.setattr(
+        the_service, "get_action_type",
+        AsyncMock(return_value={"action_type_id": 1}),
+    )
+    the_open_event = AsyncMock(return_value=700)
+    monkeypatch.setattr(the_service, "_open_history_event", the_open_event)
+    the_save = AsyncMock(return_value={"case_action_id": 31})
+    monkeypatch.setattr(the_service.the_repository, "save_follow_up", the_save)
+    monkeypatch.setattr(the_service, "to_follow_up_response", lambda the_row: the_row)
+
+    the_result = await the_service.set_follow_up_publication(
+        AsyncMock(), "RC-0001", 12, 42, FollowUpPublication(publish=True),
+    )
+
+    assert the_result == {"case_action_id": 31}
+    assert the_open_event.await_args.kwargs["the_target_status"] is None
+    the_saved = the_save.await_args.kwargs
+    assert the_saved["is_publishable"] is True
+    assert the_saved["supersedes_case_action_id"] == 12
+    assert the_saved["follow_up_state"] == "action_taken"
+    assert the_saved["recorded_outcome"] == "Ghost net removed by the park team"
+    # the internal note keeps its history; it is never part of the public view
+    assert the_saved["notes"].startswith("internal note")
+
+
+@pytest.mark.asyncio
+async def test_a_correction_is_always_created_unpublished(monkeypatch):
+    monkeypatch.setattr(
+        the_service, "load_owned_case",
+        AsyncMock(return_value={"status_code": "response_complete"}),
+    )
+    monkeypatch.setattr(
+        the_service.the_repository, "get_follow_up",
+        AsyncMock(return_value={
+            **make_record(is_publishable=True),
+            "action_date": THE_TODAY,
+            "action_type_code": "gear_removal",
+            "notes": None,
+            "recording_level": "coordinator_summary",
+            "responsible_team": "Reef team",
+            "source_reference": None,
+            "observations": None,
+        }),
+    )
+    monkeypatch.setattr(
+        the_service, "_load_selectable_action_type",
+        AsyncMock(return_value={"action_type_id": 1}),
+    )
+    monkeypatch.setattr(the_service, "_open_history_event", AsyncMock(return_value=701))
+    the_save = AsyncMock(return_value={"case_action_id": 32})
+    monkeypatch.setattr(the_service.the_repository, "save_follow_up", the_save)
+    monkeypatch.setattr(the_service, "to_follow_up_response", lambda the_row: the_row)
+
+    await the_service.correct_follow_up(
+        AsyncMock(), "RC-0001", 12, 42,
+        FollowUpCorrection(recorded_outcome="Corrected outcome", correction_reason="wording"),
+    )
+
+    # the correction does not pass is_publishable, so it takes the false default
+    assert the_save.await_args.kwargs.get("is_publishable", False) is False
