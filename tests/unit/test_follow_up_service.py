@@ -72,6 +72,23 @@ def test_completed_action_follows_a_planned_one():
         the_service.assert_action_state_fits_case("action_taken", "response_recommended")
 
 
+def test_action_stage_message_names_the_missing_step():
+    # an Intervention Required decision already exists here; the planned action is missing
+    with pytest.raises(WorkflowError, match="Record the planned action first") as the_error:
+        the_service.assert_action_state_fits_case("action_taken", "response_recommended")
+    assert "Intervention Required" not in str(the_error.value)
+
+    with pytest.raises(WorkflowError, match="response is already complete") as the_error:
+        the_service.assert_action_state_fits_case("action_planned", "response_complete")
+    assert "Intervention Required" not in str(the_error.value)
+
+    # before any decision, the decision is still the missing step
+    with pytest.raises(WorkflowError, match="Record an Intervention Required decision first"):
+        the_service.assert_action_state_fits_case("action_planned", "evidence_accepted")
+    with pytest.raises(WorkflowError, match="Record an Intervention Required decision first"):
+        the_service.assert_action_state_fits_case("action_taken", "monitoring")
+
+
 def test_unknown_state_is_a_validation_error():
     with pytest.raises(DomainValidationError):
         the_service.assert_action_state_fits_case("invented_state", "response_planned")
