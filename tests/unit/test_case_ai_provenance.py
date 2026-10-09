@@ -177,3 +177,41 @@ def test_empty_ai_context_has_no_source():
         context.suggestions
         == []
     )
+
+def test_camel_case_fields_get_readable_labels_and_threat_codes_their_names():
+    # QA-AI-01. Visual Recognition and older payloads store
+    # camelCase field names and threat category codes.
+    context = _build_ai_assisted_context(
+        [
+            {"field": "threatCategory", "source": "visual_recognition",
+             "suggested_value": "ghost_gear", "confidence": 0.81, "status": "confirmed"},
+            {"field": "estimatedDepthMetres", "source": "smart_report",
+             "suggested_value": "10", "confidence": None, "status": "corrected"},
+            {"field": "possible_threat", "source": "smart_report",
+             "suggested_value": "coral bleaching", "confidence": None, "status": "confirmed"},
+            {"field": "water_visibility", "source": "smart_report",
+             "suggested_value": "5 m", "confidence": None, "status": "confirmed"},
+        ],
+        {"ghost_gear": "Ghost fishing gear", "coral_bleaching": "Coral bleaching"},
+    )
+
+    shown = [(item.field, item.label, item.value) for item in context.suggestions]
+
+    assert shown == [
+        ("threatCategory", "Threat type", "Ghost fishing gear"),
+        ("estimatedDepthMetres", "Estimated depth", "10"),
+        # free text is not a code, so it is left as the Observer saw it
+        ("possible_threat", "Possible threat", "coral bleaching"),
+        # an unknown field still gets a readable label, never the raw key
+        ("water_visibility", "Water visibility", "5 m"),
+    ]
+
+
+def test_unknown_threat_code_is_left_unchanged():
+    context = _build_ai_assisted_context(
+        [{"field": "threatCategory", "source": "visual_recognition",
+          "suggested_value": "retired_code", "confidence": None, "status": "confirmed"}],
+        {"ghost_gear": "Ghost fishing gear"},
+    )
+
+    assert context.suggestions[0].value == "retired_code"
