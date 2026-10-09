@@ -8,7 +8,14 @@
 #       NOAA answers                      -> store, return the fresh values
 #       NOAA does not answer              -> return the last stored values,
 #                                            with their real dates, or say
-#                                            unavailable if there are none
+#                                            unavailable if there are none,
+#                                            and do not ask NOAA again for
+#                                            this site until the cooldown ends
+#
+# The cooldown exists because a NOAA call that fails costs the visitor the
+# full provider timeout (two mirrors, up to ~12 s). Without it, every page view
+# during a NOAA outage paid that wait again, which made the public site page
+# feel broken. With it, only the first view per site per cooldown pays it.
 #
 # NOAA publishes once a day, so the window (24 hours by default) costs no
 # freshness, and it keeps a busy page from calling the provider on every view.
@@ -61,6 +68,39 @@ THE_MESSAGES: dict[ExternalContextState, str] = {
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# how long to stop asking NOAA for a site after NOAA failed for it
+THE_PROVIDER_RETRY_COOLDOWN: timedelta = timedelta(minutes=15)
+
+
+# dive_site_id -> when NOAA last failed for it. Process-local on purpose: it
+# lives as long as the warm server instance, needs no schema change, and a
+# cold instance simply makes one fresh attempt before cooling down again.
+_the_last_provider_failure_by_site: dict[int, datetime] = {}
+
+
+def provider_is_cooling_down(
+    the_dive_site_id: int,
+    the_now: datetime,
+) -> bool:
+    """
+    True while a recent NOAA failure for this site is inside the cooldown, so
+    the request answers from stored values straight away instead of waiting
+    on the provider timeout again.
+    """
+
+    the_last_failure = _the_last_provider_failure_by_site.get(the_dive_site_id)
+
+    if the_last_failure is None:
+        return False
+
+    return the_now - the_last_failure < THE_PROVIDER_RETRY_COOLDOWN
+
+
+def reset_provider_cooldowns() -> None:
+    # used by tests so one test's NOAA failure never leaks into the next
+    _the_last_provider_failure_by_site.clear()
 
 
 def stored_values_are_fresh(
@@ -173,12 +213,20 @@ async def get_external_context(
 
     the_refresh_failed = False
 
-    if not stored_values_are_fresh(the_stored, utc_now()):
-        the_refreshed = await _refresh_from_provider(
-            db=db,
-            the_site=the_site,
-            the_source=the_source,
-        )
+    the_now = utc_now()
+
+    if not stored_values_are_fresh(the_stored, the_now):
+        if provider_is_cooling_down(dive_site_id, the_now):
+            # NOAA failed for this site moments ago, answer now instead of
+            # making the visitor wait on the same timeout again
+            the_refreshed = False
+
+        else:
+            the_refreshed = await _refresh_from_provider(
+                db=db,
+                the_site=the_site,
+                the_source=the_source,
+            )
 
         if the_refreshed:
             the_stored = await the_repository.list_latest_snapshots(
@@ -230,7 +278,13 @@ async def _refresh_from_provider(
     )
 
     if not the_result.available:
+        # start the cooldown, only for a provider failure; a caching failure
+        # below is a database problem and NOAA itself answered fine
+        _the_last_provider_failure_by_site[the_site["dive_site_id"]] = utc_now()
         return False
+
+    # NOAA answered, so any earlier cooldown for this site is over
+    _the_last_provider_failure_by_site.pop(the_site["dive_site_id"], None)
 
     try:
         await the_repository.save_snapshots(
