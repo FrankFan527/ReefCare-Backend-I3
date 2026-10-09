@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.exceptions import NotFoundError
 from app.schemas.external_context import ExternalContextState
@@ -18,6 +19,14 @@ from app.services import external_context_service as the_service
 
 
 THE_NOW = datetime(2026, 10, 5, 8, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def the_clean_provider_cooldowns():
+    # the NOAA cooldown is module state, so every test starts and ends clean
+    the_service.reset_provider_cooldowns()
+    yield
+    the_service.reset_provider_cooldowns()
 
 
 # verbatim from pae-paha.pacioos.hawaii.edu, Tioman, 2026-10-05
@@ -389,3 +398,86 @@ def test_the_interpretation_note_makes_no_safety_or_verification_claim():
 
     for the_word in ("safe", "healthy", "threat-free"):
         assert the_word not in the_note
+
+
+# ---------------------------------------------------------------------------
+# Service — NOAA failure cooldown (latency fix)
+# ---------------------------------------------------------------------------
+
+def make_the_unavailable_provider_result():
+    # what the adapter returns when both NOAA mirrors fail or time out
+    return the_provider.ProviderResult(
+        available=False, retrieved_at=THE_NOW,
+        unavailable_reason="The provider could not be reached",
+    )
+
+
+def patch_stale_stored_values(monkeypatch):
+    # stored values older than the staleness window, so a refresh is wanted
+    monkeypatch.setattr(
+        the_service.the_repository, "list_latest_snapshots",
+        AsyncMock(return_value=[
+            make_stored_row("degree_heating_week", 72),
+            make_stored_row("bleaching_alert_level", 72),
+        ]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_noaa_failure_is_not_retried_on_the_next_view(monkeypatch):
+    patch_site_and_source(monkeypatch)
+    patch_stale_stored_values(monkeypatch)
+
+    the_fetch = AsyncMock(return_value=make_the_unavailable_provider_result())
+    monkeypatch.setattr(the_service.the_provider, "fetch_site_context", the_fetch)
+
+    the_first_response = await the_service.get_external_context(AsyncMock(), 1)
+    the_second_response = await the_service.get_external_context(AsyncMock(), 1)
+
+    # only the first view waits on NOAA, the second answers from stored values
+    the_fetch.assert_awaited_once()
+    assert the_first_response.showing_last_stored_values is True
+    assert the_second_response.showing_last_stored_values is True
+    assert the_second_response.state == ExternalContextState.AVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_noaa_is_asked_again_once_the_cooldown_ends(monkeypatch):
+    patch_site_and_source(monkeypatch)
+    patch_stale_stored_values(monkeypatch)
+
+    the_fetch = AsyncMock(return_value=make_the_unavailable_provider_result())
+    monkeypatch.setattr(the_service.the_provider, "fetch_site_context", the_fetch)
+
+    await the_service.get_external_context(AsyncMock(), 1)
+
+    # move the clock just past the cooldown
+    the_later_time = THE_NOW + the_service.THE_PROVIDER_RETRY_COOLDOWN + timedelta(seconds=1)
+    monkeypatch.setattr(the_service, "utc_now", lambda: the_later_time)
+
+    await the_service.get_external_context(AsyncMock(), 1)
+
+    assert the_fetch.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_caching_failure_does_not_start_the_cooldown(monkeypatch):
+    patch_site_and_source(monkeypatch)
+    patch_stale_stored_values(monkeypatch)
+
+    # NOAA answers, but saving the values fails on the database side
+    the_fetch = AsyncMock(
+        return_value=the_provider.parse_response(THE_LIVE_RESPONSE, THE_NOW)
+    )
+    monkeypatch.setattr(the_service.the_provider, "fetch_site_context", the_fetch)
+    monkeypatch.setattr(
+        the_service.the_repository, "save_snapshots",
+        AsyncMock(side_effect=SQLAlchemyError("simulated caching failure")),
+    )
+
+    await the_service.get_external_context(AsyncMock(), 1)
+    await the_service.get_external_context(AsyncMock(), 1)
+
+    # the provider was fine, so it is still asked on the next view
+    assert the_fetch.await_count == 2
+
