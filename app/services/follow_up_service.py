@@ -132,8 +132,37 @@ def assert_action_state_fits_case(
     if the_status_code not in the_permitted:
         raise WorkflowError(
             f"An action cannot be recorded while the case is {the_status_code}. "
-            "Record an Intervention Required decision first."
+            f"{next_step_for_action(the_follow_up_state, the_status_code)}"
         )
+
+
+def next_step_for_action(
+    the_follow_up_state: str,
+    the_status_code: str,
+) -> str:
+    """
+    What the coordinator has to do before this action can be recorded. The
+    Intervention Required decision is only the missing step when the case has
+    not reached a response yet; once it has, the advice must not ask for a
+    decision that already exists.
+    """
+
+    if (
+        the_follow_up_state == FollowUpState.ACTION_TAKEN.value
+        and the_status_code == CaseStatus.RESPONSE_RECOMMENDED.value
+    ):
+        return "Record the planned action first, then mark it as taken."
+
+    if (
+        the_follow_up_state == FollowUpState.ACTION_PLANNED.value
+        and the_status_code == CaseStatus.RESPONSE_COMPLETE.value
+    ):
+        return (
+            "The response is already complete. Record a monitoring visit or "
+            "an external outcome instead."
+        )
+
+    return "Record an Intervention Required decision first."
 
 
 def correction_moves_case(
