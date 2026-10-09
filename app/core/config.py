@@ -257,6 +257,9 @@ class Settings(BaseSettings):
 
     # -----------------------------------------------------------------
     # Epic 9 Reef-Aware Dive Planning.
+    #
+    # I3 public live forecast horizon:
+    # Malaysia today through Malaysia today + 6 days.
     # -----------------------------------------------------------------
 
     planning_forecast_enabled: bool = True
@@ -273,12 +276,18 @@ class Settings(BaseSettings):
         le=60,
     )
 
-    # QA-E9-03.
-    #
+    # E9 Planning Brief uses a separate timeout from
+    # E4 Smart Report Structuring because the brief also
+    # includes E8 public-safe reef context.
+    planning_brief_timeout_seconds: int = Field(
+        default=35,
+        ge=10,
+        le=55,
+    )
+
     # Planning Brief is public and Gemini-backed, so it
     # has its own limiter rather than sharing the
-    # authenticated Smart Report / Visual Recognition
-    # bucket.
+    # authenticated Smart Report / Visual Recognition bucket.
     planning_brief_rate_limit_requests: int = Field(
         default=10,
         ge=1,

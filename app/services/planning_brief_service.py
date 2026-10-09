@@ -156,6 +156,11 @@ def _post_json(
     Perform the blocking Gemini request.
 
     Called only through asyncio.to_thread().
+
+    E9 uses its own Planning Brief timeout because the
+    request includes deterministic planning facts together
+    with E8 public-safe reef context and may therefore take
+    longer than E4 Smart Report requests.
     """
 
     api_key = (
@@ -201,8 +206,9 @@ def _post_json(
 
         timeout=(
             settings
-            .smart_report_timeout_seconds
+            .planning_brief_timeout_seconds
         ),
+
     ) as provider_response:
         return json.loads(
             provider_response
@@ -627,8 +633,8 @@ async def generate_planning_brief(
 
                 timeout=(
                     settings
-                    .smart_report_timeout_seconds
-                    + 1
+                    .planning_brief_timeout_seconds
+                    + 2
                 ),
             )
         )
