@@ -41,6 +41,7 @@ from app.core.exceptions import (
 from app.repositories.planning_repository import (
     get_planning_area,
     list_planning_sites,
+    list_seasonal_references,
 )
 from app.schemas.planning import (
     DateComparisonDay,
@@ -125,6 +126,44 @@ async def load_area_or_fail(
 # ---------------------------------------------------------------------------
 
 
+# Reviewed favourability -> public seasonal state.
+SEASONAL_STATE_BY_FAVOURABILITY: dict[str, SeasonalState] = {
+    "generally_less_favourable": (
+        SeasonalState.MONSOON
+    ),
+    "mixed": (
+        SeasonalState.TRANSITION
+    ),
+    "generally_more_favourable": (
+        SeasonalState.TYPICAL
+    ),
+}
+
+
+def _unreviewed_month(
+    month_number: int,
+) -> SeasonalMonthResponse:
+    return SeasonalMonthResponse(
+        month=month_number,
+
+        state=(
+            SeasonalState
+            .UNREVIEWED
+        ),
+
+        headline=(
+            "Reviewed seasonal guidance "
+            "unavailable"
+        ),
+
+        detail=(
+            "ReefCare has not yet published "
+            "reviewed seasonal guidance for "
+            "this area and month."
+        ),
+    )
+
+
 async def get_seasonal_calendar(
     db: AsyncSession,
     area_code: str,
@@ -132,12 +171,12 @@ async def get_seasonal_calendar(
     """
     Return twelve explicit month entries.
 
-    The current production schema does not yet contain a
-    reviewed seasonal-reference dataset.
+    Months come from the reviewed seasonal_condition_reference
+    rows for the area. A month without a reviewed row, or with
+    an unknown favourability, is returned as UNREVIEWED.
 
-    Historical Open-Meteo values are not substituted for
-    reviewed seasonal guidance. Until curated guidance is
-    added, every month is returned as UNREVIEWED.
+    Historical Open-Meteo values are never substituted for
+    reviewed seasonal guidance.
     """
 
     await load_area_or_fail(
@@ -145,35 +184,85 @@ async def get_seasonal_calendar(
         area_code=area_code,
     )
 
-    months = [
-        SeasonalMonthResponse(
-            month=month_number,
+    references = await list_seasonal_references(
+        db=db,
+        area_code=area_code,
+    )
 
-            state=(
-                SeasonalState
-                .UNREVIEWED
-            ),
+    reference_by_month = {
+        reference["calendar_month"]:
+            reference
 
-            headline=(
-                "Reviewed seasonal guidance "
-                "unavailable"
-            ),
+        for reference
+        in references
+    }
 
-            detail=(
-                "ReefCare has not yet published "
-                "reviewed seasonal guidance for "
-                "this area and month."
-            ),
+    months = []
+    used_references = []
+
+    for month_number in range(1, 13):
+        reference = reference_by_month.get(
+            month_number
         )
-        for month_number
-        in range(1, 13)
-    ]
+
+        state = (
+            SEASONAL_STATE_BY_FAVOURABILITY.get(
+                reference["favourability"]
+            )
+            if reference is not None
+            else None
+        )
+
+        if state is None:
+            months.append(
+                _unreviewed_month(
+                    month_number
+                )
+            )
+            continue
+
+        used_references.append(
+            reference
+        )
+
+        months.append(
+            SeasonalMonthResponse(
+                month=month_number,
+                state=state,
+                headline=reference["season_label"],
+                detail=reference["typical_conditions"],
+            )
+        )
+
+    sources = sorted(
+        {
+            reference["basis_source"]
+
+            for reference
+            in used_references
+        }
+    )
+
+    # The oldest review date applies to the calendar as a whole.
+    reviewed_at = min(
+        (
+            reference["last_reviewed_at"]
+
+            for reference
+            in used_references
+        ),
+        default=None,
+    )
 
     return SeasonalCalendarResponse(
         area_code=area_code,
-        source=None,
+        source=(
+            "; ".join(sources)
+            if sources
+            else None
+        ),
         basis=None,
-        reviewed_at=None,
+        reviewed_at=reviewed_at,
         months=months,
     )
 

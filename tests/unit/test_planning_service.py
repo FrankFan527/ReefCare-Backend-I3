@@ -109,6 +109,14 @@ async def test_seasonality_returns_all_twelve_months_as_unreviewed(
         ),
     )
 
+    monkeypatch.setattr(
+        service,
+        "list_seasonal_references",
+        AsyncMock(
+            return_value=[]
+        ),
+    )
+
     result = (
         await service
         .get_seasonal_calendar(
@@ -138,6 +146,148 @@ async def test_seasonality_returns_all_twelve_months_as_unreviewed(
 
     assert result.source is None
     assert result.basis is None
+    assert result.reviewed_at is None
+
+
+def seasonal_reference(
+    *,
+    month: int,
+    favourability: str,
+    reviewed: date = date(2026, 10, 8),
+):
+    return {
+        "calendar_month":
+            month,
+
+        "season_label":
+            f"Label {month}",
+
+        "typical_conditions":
+            f"Conditions {month}",
+
+        "favourability":
+            favourability,
+
+        "basis_source":
+            "MetMalaysia monsoon seasons",
+
+        "source_url":
+            "https://www.met.gov.my/",
+
+        "last_reviewed_at":
+            reviewed,
+    }
+
+
+@pytest.mark.asyncio
+async def test_seasonality_uses_reviewed_reference_rows(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        service,
+        "get_planning_area",
+        AsyncMock(
+            return_value=area()
+        ),
+    )
+
+    monkeypatch.setattr(
+        service,
+        "list_seasonal_references",
+        AsyncMock(
+            return_value=[
+                seasonal_reference(
+                    month=1,
+                    favourability="generally_less_favourable",
+                ),
+                seasonal_reference(
+                    month=3,
+                    favourability="mixed",
+                    reviewed=date(2026, 9, 1),
+                ),
+                seasonal_reference(
+                    month=6,
+                    favourability="generally_more_favourable",
+                ),
+            ]
+        ),
+    )
+
+    result = (
+        await service
+        .get_seasonal_calendar(
+            db=object(),
+            area_code="redang",
+        )
+    )
+
+    states = {
+        month.month: month.state
+
+        for month
+        in result.months
+    }
+
+    assert len(result.months) == 12
+    assert states[1] == SeasonalState.MONSOON
+    assert states[3] == SeasonalState.TRANSITION
+    assert states[6] == SeasonalState.TYPICAL
+
+    assert all(
+        states[month] == SeasonalState.UNREVIEWED
+
+        for month
+        in (2, 4, 5, 7, 8, 9, 10, 11, 12)
+    )
+
+    assert result.months[0].headline == "Label 1"
+    assert result.months[0].detail == "Conditions 1"
+    assert result.source == "MetMalaysia monsoon seasons"
+    assert result.reviewed_at == date(2026, 9, 1)
+
+
+@pytest.mark.asyncio
+async def test_seasonality_unknown_favourability_stays_unreviewed(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        service,
+        "get_planning_area",
+        AsyncMock(
+            return_value=area()
+        ),
+    )
+
+    monkeypatch.setattr(
+        service,
+        "list_seasonal_references",
+        AsyncMock(
+            return_value=[
+                seasonal_reference(
+                    month=2,
+                    favourability="safe",
+                ),
+            ]
+        ),
+    )
+
+    result = (
+        await service
+        .get_seasonal_calendar(
+            db=object(),
+            area_code="redang",
+        )
+    )
+
+    assert all(
+        month.state
+        == SeasonalState.UNREVIEWED
+
+        for month
+        in result.months
+    )
+
+    assert result.source is None
     assert result.reviewed_at is None
 
 
