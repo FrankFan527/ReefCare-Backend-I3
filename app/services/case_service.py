@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy.exc import (
     SQLAlchemyError,
 )
@@ -26,6 +28,9 @@ from app.repositories.evidence_repository import (
 )
 from app.repositories.location_repository import (
     get_report_location,
+)
+from app.repositories.reference_repository import (
+    list_active_threat_categories,
 )
 from app.repositories.report_repository import (
     get_reviewed_ai_suggestions,
@@ -121,8 +126,66 @@ def _summarise_ai_sources(
     return "mixed"
 
 
+# QA-AI-01. Stored suggestions use both snake_case and
+# camelCase field names (threatCategory comes from Visual
+# Recognition and older report payloads), so labels are
+# looked up on a normalised key.
+_CASE_AI_FIELD_LABELS = {
+    **_FIELD_LABELS,
+    "threat_category": "Threat type",
+}
+
+_THREAT_CODE_FIELDS = frozenset({
+    "threat_category",
+    "possible_threat",
+})
+
+
+def _normalise_ai_field(
+    field: str,
+) -> str:
+    return re.sub(
+        r"(?<!^)(?=[A-Z])",
+        "_",
+        field,
+    ).lower()
+
+
+def _ai_field_label(
+    field: str,
+) -> str:
+    the_key = _normalise_ai_field(field)
+
+    return _CASE_AI_FIELD_LABELS.get(
+        the_key,
+        the_key.replace("_", " ").capitalize(),
+    )
+
+
+def _ai_display_value(
+    field: str,
+    value,
+    threat_labels: dict[str, str],
+):
+    """
+    A threat category code (ghost_gear) is shown as its
+    reference label (Ghost fishing gear). Free-text values
+    are returned unchanged.
+    """
+
+    if (
+        _normalise_ai_field(field) in _THREAT_CODE_FIELDS
+        and isinstance(value, str)
+        and value in threat_labels
+    ):
+        return threat_labels[value]
+
+    return value
+
+
 def _build_ai_assisted_context(
     reviewed_suggestions,
+    threat_labels: dict[str, str] | None = None,
 ) -> AIAssistedContext:
     """
     Build the Coordinator-facing AI assistance projection.
@@ -159,19 +222,24 @@ def _build_ai_assisted_context(
                 ],
 
                 label=(
-                    _FIELD_LABELS.get(
+                    _ai_field_label(
                         row[
                             "field"
-                        ],
-                        row[
-                            "field"
-                        ],
+                        ]
                     )
                 ),
 
-                value=row[
-                    "suggested_value"
-                ],
+                value=(
+                    _ai_display_value(
+                        row[
+                            "field"
+                        ],
+                        row[
+                            "suggested_value"
+                        ],
+                        threat_labels or {},
+                    )
+                ),
 
                 status=row[
                     "status"
@@ -264,9 +332,18 @@ async def get_coordinator_case(
         )
     )
 
+    threat_labels = {
+        row["code"]: row["label"]
+        for row
+        in await list_active_threat_categories(
+            db=db,
+        )
+    } if reviewed_suggestions else {}
+
     ai_assisted = (
         _build_ai_assisted_context(
-            reviewed_suggestions
+            reviewed_suggestions,
+            threat_labels,
         )
     )
 
