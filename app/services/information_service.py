@@ -26,6 +26,7 @@ from app.repositories.information_repository import (
     get_open_information_request,
     get_report_for_observer,
     list_information_exchange,
+    list_information_response_evidence,
 )
 
 
@@ -85,6 +86,45 @@ async def get_open_request_for_observer(
     )
 
 
+async def load_report_with_open_request(
+    db: AsyncSession,
+    report_reference: str,
+    observer_id: int,
+) -> dict:
+    """
+    The observer's own report, but only while a question is waiting for them.
+
+    Shared by the text reply and the photo reply, so both refuse in exactly
+    the same way, and the photo reply can refuse before any file is stored.
+    """
+
+    the_report = await load_observer_report(
+        db=db,
+        report_reference=report_reference,
+        observer_id=observer_id,
+    )
+
+    if the_report["status_code"] != NEEDS_MORE_INFO_STATUS:
+        raise WorkflowError(
+            "There is no open information request on this report"
+        )
+
+    the_open_request = await get_open_information_request(
+        db=db,
+        report_reference=report_reference,
+    )
+
+    if the_open_request is None:
+        # The case is in needs_more_info but no request event exists. That
+        # should be impossible through the API, and it means the case history
+        # has been edited outside the application.
+        raise WorkflowError(
+            "This report is awaiting information but no request was recorded"
+        )
+
+    return the_report
+
+
 async def respond_to_information_request(
     db: AsyncSession,
     report_reference: str,
@@ -112,29 +152,11 @@ async def respond_to_information_request(
     The caller commits.
     """
 
-    the_report = await load_observer_report(
+    the_report = await load_report_with_open_request(
         db=db,
         report_reference=report_reference,
         observer_id=observer_id,
     )
-
-    if the_report["status_code"] != NEEDS_MORE_INFO_STATUS:
-        raise WorkflowError(
-            "There is no open information request on this report"
-        )
-
-    the_open_request = await get_open_information_request(
-        db=db,
-        report_reference=report_reference,
-    )
-
-    if the_open_request is None:
-        # The case is in needs_more_info but no request event exists. That
-        # should be impossible through the API, and it means the case history
-        # has been edited outside the application.
-        raise WorkflowError(
-            "This report is awaiting information but no request was recorded"
-        )
 
     the_new_status_code = await change_status(
         db=db,
@@ -166,9 +188,29 @@ async def get_information_exchange(
     case endpoint, which has already established ownership through
     load_owned_case(), and repeating the check with a coordinator id would
     require this function to know which kind of user is asking.
+
+    Each reply carries the photos that arrived with it, so the coordinator
+    re-reviews the answer and its pictures together. Requests and text-only
+    replies carry an empty list.
     """
 
-    return await list_information_exchange(
+    the_exchange = await list_information_exchange(
         db=db,
         report_reference=report_reference,
     )
+
+    if not the_exchange:
+        return the_exchange
+
+    the_evidence_by_event = await list_information_response_evidence(
+        db=db,
+        report_reference=report_reference,
+    )
+
+    return [
+        {
+            **the_entry,
+            "evidence": the_evidence_by_event.get(the_entry["case_event_id"], []),
+        }
+        for the_entry in the_exchange
+    ]

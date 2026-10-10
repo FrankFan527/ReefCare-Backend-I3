@@ -8,13 +8,14 @@
 # the wider follow-up record on the same history.
 # ---------------------------------------------------------------------------
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 
 from app.api.dependencies.authorization import CurrentCoordinator
 from app.api.dependencies.db import DatabaseSession
 from app.schemas.follow_up import (
     FollowUpCorrection,
     FollowUpCreate,
+    FollowUpEvidenceUploaded,
     FollowUpListResponse,
     FollowUpPublication,
     FollowUpResponse,
@@ -22,6 +23,11 @@ from app.schemas.follow_up import (
     MonitoringCreate,
 )
 from app.services import follow_up_service
+from app.services.evidence_service import (
+    EvidenceStorageError,
+    EvidenceTooLargeError,
+    EvidenceValidationError,
+)
 
 
 router = APIRouter()
@@ -181,6 +187,56 @@ async def set_follow_up_publication(
         coordinator_id=current_coordinator["user_id"],
         the_request=the_request,
     )
+
+
+@router.post(
+    "/reports/{report_reference}/follow-ups/{case_action_id}/evidence",
+    response_model=FollowUpEvidenceUploaded,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_follow_up_evidence(
+    report_reference: str,
+    case_action_id: int,
+    current_coordinator: CurrentCoordinator,
+    db: DatabaseSession,
+    file: UploadFile = File(...),
+):
+    """
+    US7.1 / US7.2. Attach one private photo to a follow-up of any type
+    (action, monitoring visit or sourced outcome).
+
+    Keyed by caseActionId, like every other follow-up route; caseEventId is
+    not accepted here. Multipart field `file`, JPEG, PNG or WebP, up to 10 MB.
+    Owner-only. Uploading never creates a follow-up or moves the case, so a
+    failed upload can simply be retried against the same caseActionId.
+    """
+
+    try:
+        return await follow_up_service.attach_follow_up_evidence(
+            db=db,
+            report_reference=report_reference,
+            case_action_id=case_action_id,
+            coordinator_id=current_coordinator["user_id"],
+            photo=file,
+        )
+
+    except EvidenceTooLargeError as the_error:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(the_error),
+        ) from the_error
+
+    except EvidenceValidationError as the_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(the_error),
+        ) from the_error
+
+    except EvidenceStorageError as the_error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to store the follow-up photo",
+        ) from the_error
 
 
 @router.post(
