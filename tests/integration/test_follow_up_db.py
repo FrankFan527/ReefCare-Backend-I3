@@ -124,6 +124,56 @@ async def find_case_in_status(
     return {"coordinator_id": the_coordinator, "report_reference": the_report}
 
 
+async def assert_case_action_is_append_only_for_the_app(
+    the_db: AsyncSession,
+    the_case_action_id: int,
+) -> None:
+    """
+    case_action is append-only for the application, checked in a way that
+    does not depend on the role this test connects as.
+
+    1. reefcare_app (the role the API login inherits from) must not hold
+       UPDATE on case_action. This holds on every database, so a branch where
+       someone granted UPDATE fails here instead of passing quietly.
+    2. If the connected role cannot UPDATE either (the documented way to run
+       this file, as reefcare_api), a direct UPDATE must really be refused.
+       Run last: the refusal aborts the transaction, which is rolled back.
+    """
+
+    the_app_role_exists = (
+        await the_db.execute(text("SELECT to_regrole('reefcare_app') IS NOT NULL"))
+    ).scalar_one()
+
+    if the_app_role_exists:
+        the_app_role_can_update = (
+            await the_db.execute(text(
+                "SELECT has_table_privilege('reefcare_app', 'case_action', 'UPDATE')"
+            ))
+        ).scalar_one()
+
+        assert the_app_role_can_update is False, (
+            "reefcare_app holds UPDATE on case_action; follow-up history must be "
+            "append-only (SELECT, INSERT only)"
+        )
+
+    the_connected_role_can_update = (
+        await the_db.execute(text(
+            "SELECT has_table_privilege(current_user, 'case_action', 'UPDATE')"
+        ))
+    ).scalar_one()
+
+    if the_connected_role_can_update:
+        # connected as the owner or another privileged role: grants do not
+        # apply to it, so a direct UPDATE proves nothing about the app
+        return
+
+    with pytest.raises(DBAPIError):
+        await the_db.execute(
+            text("UPDATE case_action SET notes = 'rewritten' WHERE case_action_id = :id"),
+            {"id": the_case_action_id},
+        )
+
+
 @pytest.mark.asyncio
 async def test_monitoring_visit_round_trip(the_session):
     the_case = await find_case_in_status(the_session, "evidence_accepted")
@@ -302,12 +352,17 @@ async def test_correction_appends_rather_than_overwrites(the_session):
             FollowUpCorrection(correction_reason="second attempt"),
         )
 
-    # and the records stay append-only at the database level
-    with pytest.raises(DBAPIError):
-        await the_session.execute(
-            text("UPDATE case_action SET notes = 'rewritten' WHERE case_action_id = :id"),
-            {"id": the_original.case_action_id},
-        )
+    # and the records stay append-only at the database level.
+    #
+    # The rule is a grant: the runtime role gets SELECT and INSERT on
+    # case_action and nothing else. Whether a direct UPDATE is refused
+    # therefore depends on who this test connects as. The table owner
+    # (neondb_owner) bypasses grants, which is why the QA run reported
+    # "DID NOT RAISE". So the grant itself is checked first, whoever is
+    # connected, and the UPDATE is only attempted where it must fail.
+    await assert_case_action_is_append_only_for_the_app(
+        the_session, the_original.case_action_id
+    )
 
 
 @pytest.mark.asyncio
@@ -435,3 +490,62 @@ async def test_publication_is_owner_only_append_only_and_reset_by_correction(the
     the_ids = {i.case_action_id for i in the_full.items}
     for the_record in (the_outcome, the_published, the_corrected, the_republished, the_withdrawn):
         assert the_record.case_action_id in the_ids
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_photo_stays_with_the_record_after_a_correction(the_session):
+    """
+    QA (Rifdhan, 10 Oct). A correction appends a record with a new history
+    event, so a photo linked to the original's event used to vanish from the
+    current record. It now follows the version chain.
+
+    The evidence row points at a placeholder key and no file is stored; the
+    whole test is rolled back.
+    """
+
+    from app.repositories.case_action_repository import save_action_evidence
+
+    the_case = await find_case_in_status(the_session, "response_planned")
+
+    if the_case is None:
+        pytest.skip("No response_planned report available on this database")
+
+    the_reference = the_case["report_reference"]
+    the_coordinator_id = the_case["coordinator_id"]
+
+    the_original = await the_service.record_follow_up(
+        the_session, the_reference, the_coordinator_id,
+        FollowUpCreate(
+            follow_up_type=FollowUpType.ACTION,
+            follow_up_state=FollowUpState.ACTION_PLANNED,
+            action_type_code="debris_cleanup",
+            responsible_team="Reef team",
+        ),
+    )
+
+    the_photo = await save_action_evidence(
+        db=the_session,
+        report_reference=the_reference,
+        case_event_id=the_original.case_event_id,
+        uploaded_by_user_id=the_coordinator_id,
+        file_reference="integration-test/not-a-real-file.jpg",
+        file_size_bytes=1234,
+    )
+
+    the_correction = await the_service.correct_follow_up(
+        the_session, the_reference, the_original.case_action_id, the_coordinator_id,
+        FollowUpCorrection(
+            responsible_team="Marine park team",
+            correction_reason="Wrong team recorded",
+        ),
+    )
+
+    assert the_correction.case_event_id != the_original.case_event_id
+
+    the_current = await the_service.get_follow_up_for_owned_case(
+        the_session, the_reference, the_correction.case_action_id, the_coordinator_id
+    )
+
+    assert the_photo["evidence_id"] in [
+        the_item.evidence_id for the_item in the_current.evidence
+    ]

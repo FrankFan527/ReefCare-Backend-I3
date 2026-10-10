@@ -283,6 +283,12 @@ async def list_follow_up_evidence(
     Safe evidence metadata for several follow-ups in one query, keyed by
     record. Evidence links to a follow-up through its case_event_id, which is
     how the Iteration 2 action evidence upload already stores it.
+
+    A correction or a publication change appends a new record with its own
+    case_event_id, so matching only the record's own event made a photo
+    disappear the moment its follow-up was corrected or published. The
+    recursive walk follows supersedes_case_action_id back through every
+    earlier version, so each record shows the photos of its whole chain.
     """
 
     if not case_action_ids:
@@ -291,12 +297,30 @@ async def list_follow_up_evidence(
     the_result = await db.execute(
         text(
             """
-            SELECT ca.case_action_id,
-                   e.evidence_id, e.media_type, e.file_size_bytes, e.uploaded_at
-            FROM case_action AS ca
-            JOIN evidence AS e ON e.case_event_id = ca.case_event_id
-            WHERE ca.case_action_id = ANY(:case_action_ids)
-            ORDER BY ca.case_action_id, e.display_order, e.evidence_id
+            WITH RECURSIVE the_version_chain AS (
+                SELECT ca.case_action_id AS the_record_id,
+                       ca.supersedes_case_action_id,
+                       ca.case_event_id
+                FROM case_action AS ca
+                WHERE ca.case_action_id = ANY(:case_action_ids)
+
+                UNION ALL
+
+                -- step back one version at a time until the first record
+                SELECT the_chain.the_record_id,
+                       earlier.supersedes_case_action_id,
+                       earlier.case_event_id
+                FROM the_version_chain AS the_chain
+                JOIN case_action AS earlier
+                    ON earlier.case_action_id = the_chain.supersedes_case_action_id
+            )
+            SELECT DISTINCT
+                   the_chain.the_record_id AS case_action_id,
+                   e.evidence_id, e.media_type, e.file_size_bytes, e.uploaded_at,
+                   e.display_order
+            FROM the_version_chain AS the_chain
+            JOIN evidence AS e ON e.case_event_id = the_chain.case_event_id
+            ORDER BY case_action_id, e.display_order, e.evidence_id
             """
         ),
         {"case_action_ids": case_action_ids},
@@ -307,6 +331,9 @@ async def list_follow_up_evidence(
     for the_row in the_result.mappings().all():
         the_item = dict(the_row)
         the_record_id = the_item.pop("case_action_id")
+
+        # display_order is only needed for the ordering above
+        the_item.pop("display_order", None)
 
         the_evidence_by_record.setdefault(the_record_id, []).append(the_item)
 

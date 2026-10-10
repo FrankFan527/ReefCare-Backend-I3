@@ -1104,3 +1104,49 @@ class InformationResponseAccepted(APIModel):
     coordinator_retained: (
         int | None
     ) = None
+
+
+# ---------------------------------------------------------------------------
+# US6.3 — observer reply with photos (QA, Rifdhan 10 Oct).
+#
+# Sent as multipart: responseText plus up to five photos in `photos`. The
+# JSON-only information-response route above stays exactly as it was.
+# ---------------------------------------------------------------------------
+
+# a reply answers one question, so it carries a handful of photos at most
+MAX_INFORMATION_RESPONSE_PHOTOS: int = 5
+
+
+class InformationResponseEvidence(APIModel):
+    """
+    Safe metadata for one photo sent with a reply. The private storage key is
+    never returned.
+    """
+
+    evidence_id: int
+
+    media_type: str
+
+    file_size_bytes: (
+        int | None
+    ) = None
+
+    uploaded_at: datetime
+
+
+class InformationResponseWithPhotosAccepted(
+    InformationResponseAccepted
+):
+    """
+    Confirmation that the answer and its photos reached the existing case,
+    under the same coordinator. caseEventId is the reply's history event,
+    which every photo here is linked to.
+    """
+
+    case_event_id: int
+
+    evidence: list[
+        InformationResponseEvidence
+    ] = Field(
+        default_factory=list
+    )

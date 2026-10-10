@@ -14,6 +14,7 @@
 #   referral until a Coordinator decides otherwise (US7.1 AC5)
 # ---------------------------------------------------------------------------
 
+from fastapi import UploadFile
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,12 +30,14 @@ from app.repositories.case_action_repository import (
     get_action_type,
     get_latest_action_event_id,
     insert_standalone_action_event,
+    save_action_evidence,
 )
 from app.repositories.case_repository import change_status
 from app.schemas.follow_up import (
     FollowUpCorrection,
     FollowUpCreate,
     FollowUpEvidenceSummary,
+    FollowUpEvidenceUploaded,
     FollowUpListResponse,
     FollowUpPublication,
     FollowUpResponse,
@@ -46,6 +49,11 @@ from app.schemas.follow_up import (
 from app.services.case_workflow_service import (
     load_owned_case,
     validate_status_transition,
+)
+from app.services.evidence_service import (
+    delete_private_evidence,
+    store_private_evidence,
+    validate_photo,
 )
 
 
@@ -809,6 +817,100 @@ async def set_follow_up_publication(
         ) from the_error
 
     return to_follow_up_response(the_saved)
+
+
+# ---------------------------------------------------------------------------
+# US7.1 / US7.2 — supporting photo for a follow-up
+# ---------------------------------------------------------------------------
+
+async def attach_follow_up_evidence(
+    db: AsyncSession,
+    report_reference: str,
+    case_action_id: int,
+    coordinator_id: int,
+    photo: UploadFile,
+) -> FollowUpEvidenceUploaded:
+    """
+    Attach one private photo to an existing follow-up of any type: an action,
+    a monitoring visit or a sourced outcome.
+
+    The follow-up is found by caseActionId, the same id every other follow-up
+    route uses, and only on the requested report. The photo is stored against
+    the record's history event, the link the Iteration 2 action evidence
+    already uses, so nothing new is needed in the database.
+
+    Uploading never creates or changes a follow-up and never moves the case,
+    so retrying a failed upload attaches to the same record. A photo sent for
+    an older version of a corrected record still shows on the current one,
+    because the evidence listing follows the version chain.
+
+    Order matters: ownership first, so a Coordinator probing another case
+    learns nothing; then the record; then the file, so nothing is stored for a
+    request that was always going to be refused.
+    """
+
+    await load_owned_case(
+        db=db,
+        report_reference=report_reference,
+        coordinator_id=coordinator_id,
+    )
+
+    the_record = await the_repository.get_follow_up(
+        db=db,
+        report_reference=report_reference,
+        case_action_id=case_action_id,
+    )
+
+    if the_record is None:
+        raise NotFoundError(
+            f"Follow-up {case_action_id} was not found on report {report_reference}"
+        )
+
+    # type, size and file signature, shared with every other photo upload
+    the_content = await validate_photo(photo)
+
+    the_stored_file = await store_private_evidence(
+        photo=photo,
+        content=the_content,
+    )
+
+    try:
+        the_evidence = await save_action_evidence(
+            db=db,
+            report_reference=report_reference,
+            case_event_id=the_record["case_event_id"],
+            uploaded_by_user_id=coordinator_id,
+            file_reference=the_stored_file.file_reference,
+            file_size_bytes=the_stored_file.file_size_bytes,
+        )
+
+        if the_evidence is None:
+            # the report disappeared between the check and the insert
+            await db.rollback()
+            await delete_private_evidence(the_stored_file.file_reference)
+
+            raise NotFoundError(f"Report {report_reference} not found")
+
+        await db.commit()
+
+    except SQLAlchemyError as the_error:
+        await db.rollback()
+
+        # never leave an orphaned private file behind a failed insert
+        await delete_private_evidence(the_stored_file.file_reference)
+
+        raise DatabaseOperationError(
+            "The follow-up photo could not be recorded"
+        ) from the_error
+
+    return FollowUpEvidenceUploaded(
+        evidence_id=the_evidence["evidence_id"],
+        media_type=the_evidence["media_type"],
+        file_size_bytes=the_evidence["file_size_bytes"],
+        uploaded_at=the_evidence["uploaded_at"],
+        case_action_id=case_action_id,
+        case_event_id=the_record["case_event_id"],
+    )
 
 
 # ---------------------------------------------------------------------------
