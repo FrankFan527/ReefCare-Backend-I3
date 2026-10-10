@@ -1,35 +1,69 @@
 # ---------------------------------------------------------------------------
-# US6.3 observer reply with photos (QA, Rifdhan 10 Oct).
+# US6.3 Observer reply with photos (QA, Rifdhan 10 Oct).
 #
-# A Coordinator asks for, say, a wider photo of the net. Until now the
-# Observer could answer only in text. This adds the photos to the same reply,
-# on the same report, under the same Coordinator.
+# A Coordinator may ask the Observer for additional information, for example:
 #
-# Kept apart from information_service on purpose: evidence_service imports
-# case_service, which imports information_service, so information_service
-# cannot import evidence_service back. This module sits above both and is
-# imported only by the route.
+#     "Please upload a wider photo of the net."
 #
-# Nothing new is needed in the database. Iteration 2 already reserved
-# evidence.case_event_id = the info_provided event for observer responses,
-# and the related-incident queries already read photos linked that way.
+# Previously the Observer could answer only with text.
+#
+# This service extends that existing information-response flow so the Observer
+# may return text plus private supporting photos while preserving:
+#
+# - the same report
+# - the same claiming Coordinator
+# - the existing needs_more_info -> under_review transition
+# - the append-only case_event audit history
+# - private evidence storage
+#
+# The module intentionally sits above information_service and evidence_service.
+#
+# evidence_service imports case_service, which ultimately depends on the
+# information workflow. Keeping evidence orchestration here avoids creating a
+# circular service dependency.
+#
+# Database design:
+#
+#   case_event
+#       info_requested
+#       info_provided
+#
+#   evidence.case_event_id
+#       -> the info_provided event created for this response
+#
+# No new database table or migration is required.
 # ---------------------------------------------------------------------------
 
 from fastapi import UploadFile
-from sqlalchemy.exc import DBAPIError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+
+from sqlalchemy.exc import (
+    DBAPIError,
+    SQLAlchemyError,
+)
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+)
 
 from app.core.exceptions import (
     ConflictError,
     DatabaseOperationError,
     NotFoundError,
 )
-from app.repositories.case_action_repository import save_action_evidence
+
 from app.repositories.information_repository import (
     get_latest_information_response_event_id,
+    save_information_response_evidence,
 )
-from app.schemas.report import MAX_INFORMATION_RESPONSE_PHOTOS
-from app.services import information_service as the_information_service
+
+from app.schemas.report import (
+    MAX_INFORMATION_RESPONSE_PHOTOS,
+)
+
+from app.services import (
+    information_service
+    as the_information_service,
+)
+
 from app.services.evidence_service import (
     EvidenceValidationError,
     delete_private_evidence,
@@ -46,116 +80,333 @@ async def respond_to_information_request_with_photos(
     photos: list[UploadFile],
 ) -> dict:
     """
-    An observer's answer plus photos, written as one unit (US6.3, QA 10 Oct).
+    Record one Observer information response together with
+    zero or more private photos.
 
-    The coordinator asks for, say, a wider photo of the net. The answer and
-    the photos either all arrive or none do: a half-saved reply would move
-    the case back to under_review with the requested photo missing.
+    The reply and photos are treated as one logical unit.
 
-    Order matters:
+    Sequence:
 
-      1. ownership and an open request, before reading any file
-      2. the photo count, then every file validated, before anything is stored
-      3. files stored privately
-      4. the reply written through respond_to_information_request(), the same
-         status move as a text reply, so the same coordinator keeps the case
-      5. each photo linked to the reply's info_provided event, the link the
-         Iteration 2 schema reserved for observer responses
-      6. one commit; on any failure the transaction rolls back and every file
-         stored in step 3 is deleted, so a retry starts clean
+    1. Verify that the report belongs to this Observer and
+       currently has an open information request.
 
-    Commits itself, unlike the text reply, because cleaning up stored files
-    has to happen beside the rollback.
+    2. Validate the photo count and every uploaded file
+       before storing anything.
+
+    3. Store validated files privately in Supabase.
+
+    4. Use the existing information response workflow to
+       create the info_provided event and move the case from
+       needs_more_info back to under_review.
+
+    5. Resolve the newly-created info_provided case_event.
+
+    6. Persist evidence metadata linked to that case_event.
+
+    7. Commit once.
+
+    If any database/storage step fails:
+
+    - the database transaction is rolled back
+    - every private object already stored by this request is
+      removed best-effort
+    - the original report and Coordinator assignment remain
+      unchanged
+
+    This service commits itself because storage cleanup and
+    database rollback must be coordinated in one place.
     """
 
-    await the_information_service.load_report_with_open_request(
-        db=db,
-        report_reference=report_reference,
-        observer_id=observer_id,
+    # ------------------------------------------------------------------
+    # Ownership + workflow check.
+    #
+    # This happens before any file bytes are read or stored.
+    # ------------------------------------------------------------------
+
+    await (
+        the_information_service
+        .load_report_with_open_request(
+            db=db,
+
+            report_reference=(
+                report_reference
+            ),
+
+            observer_id=(
+                observer_id
+            ),
+        )
     )
 
-    if len(photos) > MAX_INFORMATION_RESPONSE_PHOTOS:
+    # ------------------------------------------------------------------
+    # File-count boundary.
+    # ------------------------------------------------------------------
+
+    if (
+        len(photos)
+        >
+        MAX_INFORMATION_RESPONSE_PHOTOS
+    ):
         raise EvidenceValidationError(
-            f"A reply can include at most {MAX_INFORMATION_RESPONSE_PHOTOS} photos"
+            "A reply can include at most "
+            f"{MAX_INFORMATION_RESPONSE_PHOTOS} "
+            "photos"
         )
 
-    # validate every file first, so one bad photo stores nothing at all
-    the_validated_photos: list[tuple[UploadFile, bytes]] = []
+    # ------------------------------------------------------------------
+    # Validate every photo before storing any photo.
+    #
+    # One invalid photo therefore causes zero objects to be
+    # written to private storage.
+    # ------------------------------------------------------------------
+
+    the_validated_photos: list[
+        tuple[
+            UploadFile,
+            bytes,
+        ]
+    ] = []
 
     for the_photo in photos:
-        the_content = await validate_photo(the_photo)
-        the_validated_photos.append((the_photo, the_content))
+        the_content = (
+            await validate_photo(
+                the_photo
+            )
+        )
 
+        the_validated_photos.append(
+            (
+                the_photo,
+                the_content,
+            )
+        )
+
+    # StoredEvidence objects written during this request.
+    #
+    # If anything after storage fails, these object keys are
+    # removed best-effort so retries do not leave orphans.
     the_stored_files = []
 
     try:
-        for the_photo, the_content in the_validated_photos:
-            the_stored_files.append(
+        # --------------------------------------------------------------
+        # Store every validated photo privately.
+        # --------------------------------------------------------------
+
+        for (
+            the_photo,
+            the_content,
+        ) in the_validated_photos:
+            the_stored_file = (
                 await store_private_evidence(
                     photo=the_photo,
                     content=the_content,
                 )
             )
 
-        the_result = await the_information_service.respond_to_information_request(
-            db=db,
-            report_reference=report_reference,
-            observer_id=observer_id,
-            response_text=response_text,
+            the_stored_files.append(
+                the_stored_file
+            )
+
+        # --------------------------------------------------------------
+        # Record the normal Observer information response.
+        #
+        # This uses the existing canonical flow:
+        #
+        # needs_more_info
+        #       ->
+        # under_review
+        #
+        # and creates an info_provided case_event.
+        #
+        # It deliberately does not commit.
+        # --------------------------------------------------------------
+
+        the_result = (
+            await (
+                the_information_service
+                .respond_to_information_request(
+                    db=db,
+
+                    report_reference=(
+                        report_reference
+                    ),
+
+                    observer_id=(
+                        observer_id
+                    ),
+
+                    response_text=(
+                        response_text
+                    ),
+                )
+            )
         )
 
-        the_case_event_id = await get_latest_information_response_event_id(
-            db=db,
-            report_reference=report_reference,
-            observer_id=observer_id,
+        # --------------------------------------------------------------
+        # Resolve the exact Observer info_provided event that
+        # was just created.
+        #
+        # Evidence is attached to this event, not merely to
+        # the general report.
+        # --------------------------------------------------------------
+
+        the_case_event_id = (
+            await (
+                get_latest_information_response_event_id(
+                    db=db,
+
+                    report_reference=(
+                        report_reference
+                    ),
+
+                    observer_id=(
+                        observer_id
+                    ),
+                )
+            )
         )
 
         if the_case_event_id is None:
             raise DatabaseOperationError(
-                "The reply history event could not be resolved"
+                "The reply history event "
+                "could not be resolved"
             )
 
-        the_evidence: list[dict] = []
+        # --------------------------------------------------------------
+        # Persist safe evidence metadata.
+        #
+        # The repository independently verifies that:
+        #
+        # - report belongs to Observer
+        # - event belongs to report
+        # - event is info_provided
+        # - event actor is Observer
+        # --------------------------------------------------------------
 
-        for the_stored_file in the_stored_files:
-            the_saved = await save_action_evidence(
-                db=db,
-                report_reference=report_reference,
-                case_event_id=the_case_event_id,
-                uploaded_by_user_id=observer_id,
-                file_reference=the_stored_file.file_reference,
-                file_size_bytes=the_stored_file.file_size_bytes,
+        the_evidence: list[
+            dict
+        ] = []
+
+        for (
+            the_stored_file
+        ) in the_stored_files:
+            the_saved = (
+                await (
+                    save_information_response_evidence(
+                        db=db,
+
+                        report_reference=(
+                            report_reference
+                        ),
+
+                        case_event_id=(
+                            the_case_event_id
+                        ),
+
+                        observer_id=(
+                            observer_id
+                        ),
+
+                        file_reference=(
+                            the_stored_file
+                            .file_reference
+                        ),
+
+                        file_size_bytes=(
+                            the_stored_file
+                            .file_size_bytes
+                        ),
+                    )
+                )
             )
 
             if the_saved is None:
-                raise NotFoundError(f"Report {report_reference} not found")
+                raise NotFoundError(
+                    f"Report "
+                    f"{report_reference} "
+                    f"not found"
+                )
 
-            the_evidence.append(dict(the_saved))
+            the_evidence.append(
+                dict(
+                    the_saved
+                )
+            )
+
+        # --------------------------------------------------------------
+        # One transaction boundary for:
+        #
+        # - status transition
+        # - info_provided event
+        # - evidence metadata
+        # --------------------------------------------------------------
 
         await db.commit()
 
     except Exception as the_error:
+        # --------------------------------------------------------------
+        # Database rollback.
+        # --------------------------------------------------------------
+
         await db.rollback()
 
-        # never leave orphaned private files behind a reply that did not save
-        for the_stored_file in the_stored_files:
-            await delete_private_evidence(the_stored_file.file_reference)
+        # --------------------------------------------------------------
+        # Private-storage compensation.
+        #
+        # Supabase is outside the PostgreSQL transaction, so
+        # any objects uploaded before the DB failure must be
+        # removed manually.
+        # --------------------------------------------------------------
 
-        if isinstance(the_error, DBAPIError):
-            # e.g. a second reply racing this one: the case already moved on
+        for (
+            the_stored_file
+        ) in the_stored_files:
+            await delete_private_evidence(
+                the_stored_file
+                .file_reference
+            )
+
+        # --------------------------------------------------------------
+        # Concurrent/invalid workflow transition.
+        #
+        # Example:
+        #
+        # Two reply requests race and the first one already
+        # moved the report out of needs_more_info.
+        # --------------------------------------------------------------
+
+        if isinstance(
+            the_error,
+            DBAPIError,
+        ):
             raise ConflictError(
-                "The response could not be recorded for this report"
+                "The response could not be "
+                "recorded for this report"
             ) from the_error
 
-        if isinstance(the_error, SQLAlchemyError):
+        # --------------------------------------------------------------
+        # Other SQLAlchemy/database failure.
+        # --------------------------------------------------------------
+
+        if isinstance(
+            the_error,
+            SQLAlchemyError,
+        ):
             raise DatabaseOperationError(
-                "The response could not be recorded for this report"
+                "The response could not be "
+                "recorded for this report"
             ) from the_error
 
+        # Preserve domain/storage/validation exceptions for
+        # the route layer to translate normally.
         raise
 
     return {
         **the_result,
-        "case_event_id": the_case_event_id,
-        "evidence": the_evidence,
+
+        "case_event_id":
+            the_case_event_id,
+
+        "evidence":
+            the_evidence,
     }
