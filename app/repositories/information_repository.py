@@ -204,3 +204,99 @@ async def list_information_exchange(
         dict(the_row)
         for the_row in the_exchange_result.mappings().all()
     ]
+
+async def get_latest_information_response_event_id(
+    db: AsyncSession,
+    report_reference: str,
+    observer_id: int,
+) -> int | None:
+    """
+    The info_provided event this observer has just written.
+
+    reefcare_change_status() writes the event but returns only the new status
+    code, so the photos of a reply find their event here. Called inside the
+    same transaction straight after the status move, which holds the report
+    in under_review, so a second reply cannot slip in between.
+    """
+
+    the_event_result = await db.execute(
+        text(
+            """
+            SELECT MAX(e.case_event_id)
+
+            FROM case_event AS e
+
+            JOIN report AS r
+                ON r.report_id = e.report_id
+
+            WHERE
+                r.report_reference = :report_reference
+                AND r.deleted_at IS NULL
+                AND e.event_type = :response_event
+                AND e.actor_user_id = :observer_id
+            """
+        ),
+        {
+            "report_reference": report_reference,
+            "response_event": INFORMATION_RESPONSE_EVENT,
+            "observer_id": observer_id,
+        },
+    )
+
+    return the_event_result.scalar_one_or_none()
+
+
+async def list_information_response_evidence(
+    db: AsyncSession,
+    report_reference: str,
+) -> dict[int, list[dict]]:
+    """
+    Photos sent with observer replies, keyed by the info_provided event they
+    arrived with, so the coordinator sees each photo beside the answer it
+    came with (US6.3 AC4) rather than mixed in with the original submission.
+
+    Safe metadata only: file_reference stays private, and the image streams
+    through the existing owner-checked evidence route.
+    """
+
+    the_evidence_result = await db.execute(
+        text(
+            """
+            SELECT
+                e.case_event_id,
+                e.evidence_id,
+                e.media_type,
+                e.file_size_bytes,
+                e.uploaded_at
+
+            FROM evidence AS e
+
+            JOIN case_event AS ce
+                ON ce.case_event_id = e.case_event_id
+
+            JOIN report AS r
+                ON r.report_id = e.report_id
+
+            WHERE
+                r.report_reference = :report_reference
+                AND r.deleted_at IS NULL
+                AND ce.event_type = :response_event
+
+            ORDER BY e.case_event_id, e.display_order, e.evidence_id
+            """
+        ),
+        {
+            "report_reference": report_reference,
+            "response_event": INFORMATION_RESPONSE_EVENT,
+        },
+    )
+
+    the_evidence_by_event: dict[int, list[dict]] = {}
+
+    for the_row in the_evidence_result.mappings().all():
+        the_item = dict(the_row)
+        the_event_id = the_item.pop("case_event_id")
+
+        the_evidence_by_event.setdefault(the_event_id, []).append(the_item)
+
+    return the_evidence_by_event

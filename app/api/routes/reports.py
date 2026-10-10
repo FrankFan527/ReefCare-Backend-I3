@@ -43,6 +43,7 @@ from app.repositories.reference_repository import (
 from app.schemas.report import (
     InformationResponseAccepted,
     InformationResponseCreate,
+    InformationResponseWithPhotosAccepted,
     LocationCheckRequest,
     LocationCheckResponse,
     ObserverReportDetailResponse,
@@ -75,6 +76,9 @@ from app.services.evidence_service import (
 from app.services.information_service import (
     get_open_request_for_observer,
     respond_to_information_request,
+)
+from app.services.information_reply_photo_service import (
+    respond_to_information_request_with_photos,
 )
 from app.services.location_service import (
     evaluate_site_distance_warning,
@@ -757,6 +761,157 @@ async def submit_information_response(
         coordinator_retained=(
             the_result[
                 "coordinator_retained"
+            ]
+        ),
+    )
+
+
+@router.post(
+    "/{report_reference}/information-response/with-photos",
+    response_model=(
+        InformationResponseWithPhotosAccepted
+    ),
+    status_code=(
+        status.HTTP_201_CREATED
+    ),
+)
+async def submit_information_response_with_photos(
+    report_reference: str,
+    background_tasks: BackgroundTasks,
+    current_observer: CurrentObserver,
+    db: DatabaseSession,
+    response_text: str = Form(
+        ...,
+        alias="responseText",
+    ),
+    photos: list[UploadFile] | None = File(
+        default=None,
+    ),
+):
+    """
+    US6.3 / QA 10 Oct. Answer an information request with text and photos.
+
+    multipart/form-data: `responseText` (1-2000 characters, required) and up
+    to five photos in `photos` (JPEG, PNG or WebP, 10 MB each). The reply and
+    its photos are saved together or not at all, and the same coordinator
+    keeps the case. The JSON-only route above is unchanged.
+    """
+
+    try:
+        # same text rules as the JSON reply
+        the_response_input = (
+            InformationResponseCreate(
+                response_text=response_text,
+            )
+        )
+
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=(
+                status
+                .HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+            detail=exc.errors(
+                include_context=False,
+            ),
+        ) from exc
+
+    the_photos = photos or []
+
+    try:
+        the_result = (
+            await respond_to_information_request_with_photos(
+                db=db,
+                report_reference=(
+                    report_reference
+                ),
+                observer_id=(
+                    current_observer[
+                        "user_id"
+                    ]
+                ),
+                response_text=(
+                    the_response_input
+                    .response_text
+                ),
+                photos=the_photos,
+            )
+        )
+
+    except EvidenceTooLargeError as exc:
+        raise HTTPException(
+            status_code=(
+                status
+                .HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            ),
+            detail=str(exc),
+        ) from exc
+
+    except EvidenceValidationError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+            detail=str(exc),
+        ) from exc
+
+    except EvidenceStorageError as exc:
+        raise HTTPException(
+            status_code=(
+                status
+                .HTTP_500_INTERNAL_SERVER_ERROR
+            ),
+            detail=(
+                "Unable to store the reply photos"
+            ),
+        ) from exc
+
+    if the_result["evidence"]:
+        # new photos are new input for US5.9, the same way a submission is;
+        # the task opens its own session after the response is sent
+        background_tasks.add_task(
+            run_related_incident_detection_in_background,
+            report_reference,
+        )
+
+    return InformationResponseWithPhotosAccepted(
+        report_reference=(
+            the_result[
+                "report_reference"
+            ]
+        ),
+
+        status=(
+            the_result[
+                "status"
+            ]
+        ),
+
+        response_text=(
+            the_result[
+                "response_text"
+            ]
+        ),
+
+        responded_at=datetime.now(
+            timezone.utc
+        ),
+
+        coordinator_retained=(
+            the_result[
+                "coordinator_retained"
+            ]
+        ),
+
+        case_event_id=(
+            the_result[
+                "case_event_id"
+            ]
+        ),
+
+        evidence=(
+            the_result[
+                "evidence"
             ]
         ),
     )
