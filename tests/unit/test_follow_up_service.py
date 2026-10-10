@@ -574,3 +574,136 @@ async def test_a_correction_is_always_created_unpublished(monkeypatch):
 
     # the correction does not pass is_publishable, so it takes the false default
     assert the_save.await_args.kwargs.get("is_publishable", False) is False
+
+
+# ---------------------------------------------------------------------------
+# QA (Rifdhan, 10 Oct) — supporting photo for any follow-up type
+# ---------------------------------------------------------------------------
+
+def make_photo_mocks(monkeypatch, the_record):
+    """
+    Wire the photo upload to mocks and hand them back, so each test can check
+    what was (and was not) stored or written.
+    """
+
+    the_mocks = {
+        "load_owned_case": AsyncMock(return_value={"status_code": "response_complete"}),
+        "get_follow_up": AsyncMock(return_value=the_record),
+        "validate_photo": AsyncMock(return_value=b"\xff\xd8\xff-photo-bytes"),
+        "store_private_evidence": AsyncMock(
+            return_value=type(
+                "the_stored_file", (), {
+                    "file_reference": "evidence/private/abc.jpg",
+                    "file_size_bytes": 2048,
+                },
+            )()
+        ),
+        "save_action_evidence": AsyncMock(return_value={
+            "evidence_id": 501,
+            "media_type": "photo",
+            "file_size_bytes": 2048,
+            "uploaded_at": "2026-10-10T03:00:00+00:00",
+        }),
+        "delete_private_evidence": AsyncMock(),
+    }
+
+    monkeypatch.setattr(the_service, "load_owned_case", the_mocks["load_owned_case"])
+    monkeypatch.setattr(the_service.the_repository, "get_follow_up", the_mocks["get_follow_up"])
+
+    for the_name in (
+        "validate_photo", "store_private_evidence",
+        "save_action_evidence", "delete_private_evidence",
+    ):
+        monkeypatch.setattr(the_service, the_name, the_mocks[the_name])
+
+    return the_mocks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "the_follow_up_type",
+    ["action", "monitoring", "sourced_outcome"],
+)
+async def test_follow_up_photo_attaches_to_the_record_event(monkeypatch, the_follow_up_type):
+    the_mocks = make_photo_mocks(
+        monkeypatch,
+        {"case_action_id": 30, "case_event_id": 593, "follow_up_type": the_follow_up_type},
+    )
+    the_db = AsyncMock()
+
+    the_result = await the_service.attach_follow_up_evidence(
+        the_db, "RC-0092", 30, 42, photo=object(),
+    )
+
+    # found by caseActionId on this report, stored against the record's event
+    assert the_mocks["get_follow_up"].await_args.kwargs["case_action_id"] == 30
+    assert the_mocks["get_follow_up"].await_args.kwargs["report_reference"] == "RC-0092"
+    the_saved = the_mocks["save_action_evidence"].await_args.kwargs
+    assert the_saved["case_event_id"] == 593
+    assert the_saved["uploaded_by_user_id"] == 42
+
+    the_db.commit.assert_awaited_once()
+    assert the_result.evidence_id == 501
+    assert the_result.case_action_id == 30
+    assert the_result.case_event_id == 593
+
+    # the private storage key never leaves the backend
+    assert "file_reference" not in the_result.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_photo_checks_ownership_before_reading_the_file(monkeypatch):
+    the_mocks = make_photo_mocks(monkeypatch, {"case_action_id": 30, "case_event_id": 593})
+    the_mocks["load_owned_case"].side_effect = AuthorizationError("not yours")
+
+    with pytest.raises(AuthorizationError):
+        await the_service.attach_follow_up_evidence(AsyncMock(), "RC-0092", 30, 7, photo=object())
+
+    the_mocks["validate_photo"].assert_not_awaited()
+    the_mocks["store_private_evidence"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_photo_for_an_unknown_record_stores_nothing(monkeypatch):
+    # the frontend 404: a caseEventId (593) sent where a caseActionId belongs
+    the_mocks = make_photo_mocks(monkeypatch, None)
+
+    with pytest.raises(NotFoundError):
+        await the_service.attach_follow_up_evidence(AsyncMock(), "RC-0092", 593, 42, photo=object())
+
+    the_mocks["store_private_evidence"].assert_not_awaited()
+    the_mocks["save_action_evidence"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_photo_failure_removes_the_stored_file(monkeypatch):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.core.exceptions import DatabaseOperationError
+
+    the_mocks = make_photo_mocks(monkeypatch, {"case_action_id": 30, "case_event_id": 593})
+    the_mocks["save_action_evidence"].side_effect = SQLAlchemyError("insert failed")
+    the_db = AsyncMock()
+
+    with pytest.raises(DatabaseOperationError):
+        await the_service.attach_follow_up_evidence(the_db, "RC-0092", 30, 42, photo=object())
+
+    the_db.rollback.assert_awaited()
+    the_db.commit.assert_not_awaited()
+    the_mocks["delete_private_evidence"].assert_awaited_once_with("evidence/private/abc.jpg")
+
+
+@pytest.mark.asyncio
+async def test_follow_up_photo_never_writes_a_follow_up_or_moves_the_case(monkeypatch):
+    # a retried upload must attach to the same record, never create another
+    make_photo_mocks(monkeypatch, {"case_action_id": 30, "case_event_id": 593})
+    the_save_follow_up = AsyncMock()
+    the_change_status = AsyncMock()
+    monkeypatch.setattr(the_service.the_repository, "save_follow_up", the_save_follow_up)
+    monkeypatch.setattr(the_service, "change_status", the_change_status)
+
+    await the_service.attach_follow_up_evidence(AsyncMock(), "RC-0092", 30, 42, photo=object())
+    await the_service.attach_follow_up_evidence(AsyncMock(), "RC-0092", 30, 42, photo=object())
+
+    the_save_follow_up.assert_not_awaited()
+    the_change_status.assert_not_awaited()

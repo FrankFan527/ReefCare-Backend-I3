@@ -244,6 +244,17 @@ class FollowUpEvidenceSummary(APIModel):
     uploaded_at: datetime
 
 
+class FollowUpEvidenceUploaded(FollowUpEvidenceSummary):
+    """
+    One photo attached to a follow-up. The record it was attached to and that
+    record's history event are returned so the caller can match the photo to
+    the right follow-up. Nothing about the follow-up itself changes.
+    """
+
+    case_action_id: int
+    case_event_id: int
+
+
 class FollowUpResponse(APIModel):
     case_action_id: int
     case_event_id: int

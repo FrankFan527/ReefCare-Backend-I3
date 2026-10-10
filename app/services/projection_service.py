@@ -196,6 +196,12 @@ def build_coordinator_case_projection(
                 actor_display_name=row[
                     "actor_display_name"
                 ],
+                case_event_id=row.get(
+                    "case_event_id"
+                ),
+                evidence=row.get(
+                    "evidence"
+                ) or [],
             )
             for row in information_exchange
         ]

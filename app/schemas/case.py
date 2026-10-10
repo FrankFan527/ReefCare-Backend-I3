@@ -298,6 +298,23 @@ class AIAssistedContext(APIModel):
     )
 
 
+class InformationExchangeEvidence(APIModel):
+    """
+    Safe metadata for a photo sent with an observer reply. The image streams
+    through the owner-checked evidence route by evidenceId.
+    """
+
+    evidence_id: int
+
+    media_type: str
+
+    file_size_bytes: (
+        int | None
+    ) = None
+
+    uploaded_at: datetime
+
+
 class InformationExchangeEntry(APIModel):
     """
     One information-request/response interaction.
@@ -318,6 +335,19 @@ class InformationExchangeEntry(APIModel):
     actor_display_name: (
         str | None
     ) = None
+
+    # US6.3 AC4: the reply's history event and the photos that came with it,
+    # so the coordinator re-reviews the answer and its pictures together.
+    # Empty for a request or a text-only reply.
+    case_event_id: (
+        int | None
+    ) = None
+
+    evidence: list[
+        InformationExchangeEvidence
+    ] = Field(
+        default_factory=list
+    )
 
 
 class CoordinatorCaseResponse(APIModel):
