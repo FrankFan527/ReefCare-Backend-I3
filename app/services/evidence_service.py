@@ -1,13 +1,17 @@
 from dataclasses import dataclass
+
 from functools import lru_cache
+
 from uuid import uuid4
 
 import mimetypes
 
 from fastapi import UploadFile
+
 from starlette.concurrency import (
     run_in_threadpool,
 )
+
 from supabase import (
     Client,
     create_client,
@@ -16,12 +20,19 @@ from supabase import (
 from app.core.config import (
     settings,
 )
+
 from app.core.exceptions import (
     NotFoundError,
 )
+
 from app.repositories.evidence_repository import (
     get_case_evidence,
 )
+
+from app.repositories.report_repository import (
+    get_observer_report_evidence,
+)
+
 from app.services.case_service import (
     get_owned_case,
 )
@@ -194,6 +205,7 @@ async def get_case_evidence_file(
 
     # First security boundary:
     # coordinator must currently own this report.
+
     await get_owned_case(
         db=db,
         report_reference=(
@@ -206,6 +218,7 @@ async def get_case_evidence_file(
 
     # Second security boundary:
     # evidence must actually belong to this report.
+
     evidence = await get_case_evidence(
         db=db,
         report_reference=(
@@ -217,6 +230,90 @@ async def get_case_evidence_file(
     if evidence is None:
         # Do not reveal whether the evidence belongs to a
         # different case.
+        raise NotFoundError(
+            "Evidence not found"
+        )
+
+    file_reference = (
+        evidence[
+            "file_reference"
+        ]
+    )
+
+    def download_object():
+        client = (
+            _get_supabase_client()
+        )
+
+        return (
+            client
+            .storage
+            .from_(
+                settings
+                .supabase_storage_bucket
+            )
+            .download(
+                file_reference
+            )
+        )
+
+    try:
+        content = await run_in_threadpool(
+            download_object
+        )
+
+    except Exception as exc:
+        raise EvidenceStorageError(
+            "Unable to load private evidence"
+        ) from exc
+
+    return EvidenceFile(
+        content=content,
+        content_type=(
+            _content_type_for_reference(
+                file_reference
+            )
+        ),
+    )
+
+
+async def get_observer_evidence_file(
+    *,
+    db,
+    report_reference: str,
+    evidence_id: int,
+    observer_id: int,
+) -> EvidenceFile:
+    """
+    Return one private evidence image only when it is
+    visible to the authenticated Observer.
+
+    The repository verifies in one SQL query that:
+    - the report belongs to this Observer
+    - the evidence belongs to the same report
+    - the report is live
+    - the evidence is either:
+      * original submission evidence, or
+      * this Observer's info_provided reply evidence
+
+    Coordinator E7 follow-up evidence is therefore excluded.
+    The Supabase object key remains server-side.
+    """
+
+    evidence = (
+        await get_observer_report_evidence(
+            db=db,
+            observer_id=observer_id,
+            report_reference=(
+                report_reference
+            ),
+            evidence_id=(
+                evidence_id
+            ),
+        )
+    )
+
+    if evidence is None:
         raise NotFoundError(
             "Evidence not found"
         )
@@ -295,6 +392,7 @@ async def validate_photo(
 
     # Read only one byte beyond the maximum so an extremely
     # large upload is not unnecessarily loaded into memory.
+
     content = await photo.read(
         MAX_PHOTO_BYTES + 1
     )
@@ -374,6 +472,7 @@ async def store_private_evidence(
                 file_options={
                     "content-type":
                         content_type,
+
                     "upsert":
                         "false",
                 },
@@ -392,9 +491,11 @@ async def store_private_evidence(
 
     return StoredEvidence(
         file_reference=object_key,
+
         file_size_bytes=len(
             content
         ),
+
         content_type=content_type,
     )
 

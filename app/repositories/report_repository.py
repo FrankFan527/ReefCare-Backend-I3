@@ -1,13 +1,16 @@
 from datetime import date
+
 from typing import Any
 
 from sqlalchemy import (
     bindparam,
     text,
 )
+
 from sqlalchemy.dialects.postgresql import (
     JSONB,
 )
+
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
@@ -270,7 +273,6 @@ async def get_owned_dive_session(
 # No coordinator identity, internal decision field or private evidence object
 # reference is selected.
 # ---------------------------------------------------------------------------
-
 
 async def list_my_reports(
     db: AsyncSession,
@@ -562,11 +564,41 @@ async def get_my_report(
                 (
                     SELECT COUNT(*)
 
-                    FROM evidence ev
+                    FROM evidence AS ev
+
+                    LEFT JOIN case_event AS evidence_event
+                        ON evidence_event.case_event_id =
+                           ev.case_event_id
+
+                        AND evidence_event.report_id =
+                            ev.report_id
 
                     WHERE
                         ev.report_id =
                             r.report_id
+
+                        AND (
+                            (
+                                ev.case_event_id IS NULL
+
+                                AND (
+                                    ev.uploaded_by_user_id IS NULL
+
+                                    OR ev.uploaded_by_user_id =
+                                       :observer_id
+                                )
+                            )
+
+                            OR
+
+                            (
+                                evidence_event.event_type =
+                                    'info_provided'
+
+                                AND ev.uploaded_by_user_id =
+                                    :observer_id
+                            )
+                        )
                 ) AS evidence_count,
 
                 COALESCE(
@@ -708,6 +740,214 @@ async def get_my_report(
     )
 
 
+# ---------------------------------------------------------------------------
+# Iteration 3 — E6 Observer-owned evidence.
+#
+# These queries support the Observer's My Reports / My Case view.
+#
+# The Observer may see:
+# 1. evidence submitted with their original report
+# 2. evidence they later supplied through an info_provided
+#    information-response event
+#
+# The Observer must NOT see evidence added by a Coordinator
+# for E7 follow-up/action records.
+#
+# Original report evidence predates uploaded_by_user_id and
+# therefore may legitimately have:
+#
+#     case_event_id = NULL
+#     uploaded_by_user_id = NULL
+#
+# Additional-information photos created in Iteration 3 have:
+#
+#     case_event.event_type = 'info_provided'
+#     uploaded_by_user_id = observer_id
+#
+# Ownership is repeated in SQL so no future caller can turn
+# either query into an evidence-enumeration path.
+# ---------------------------------------------------------------------------
+
+async def list_observer_report_evidence(
+    db: AsyncSession,
+    *,
+    observer_id: int,
+    report_reference: str,
+) -> list[dict]:
+    """
+    Return safe metadata for evidence visible to the
+    authenticated Observer.
+
+    file_reference and storage details are deliberately not
+    selected by this list projection.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                ev.evidence_id,
+                ev.media_type
+
+            FROM report AS r
+
+            JOIN evidence AS ev
+                ON ev.report_id =
+                   r.report_id
+
+            LEFT JOIN case_event AS evidence_event
+                ON evidence_event.case_event_id =
+                   ev.case_event_id
+
+                AND evidence_event.report_id =
+                    ev.report_id
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.observer_id =
+                    :observer_id
+
+                AND r.deleted_at IS NULL
+
+                AND (
+                    (
+                        ev.case_event_id IS NULL
+
+                        AND (
+                            ev.uploaded_by_user_id IS NULL
+
+                            OR ev.uploaded_by_user_id =
+                               :observer_id
+                        )
+                    )
+
+                    OR
+
+                    (
+                        evidence_event.event_type =
+                            'info_provided'
+
+                        AND ev.uploaded_by_user_id =
+                            :observer_id
+                    )
+                )
+
+            ORDER BY
+                ev.display_order ASC NULLS LAST,
+                ev.evidence_id ASC
+            """
+        ),
+        {
+            "observer_id":
+                observer_id,
+
+            "report_reference":
+                report_reference,
+        },
+    )
+
+    return [
+        dict(row)
+        for row in result.mappings().all()
+    ]
+
+
+async def get_observer_report_evidence(
+    db: AsyncSession,
+    *,
+    observer_id: int,
+    report_reference: str,
+    evidence_id: int,
+) -> dict | None:
+    """
+    Return one private evidence record only when it is
+    visible to the authenticated Observer.
+
+    The private file_reference is returned only to the
+    server-side evidence service and never to the API model.
+    """
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                ev.evidence_id,
+                ev.media_type,
+                ev.file_reference
+
+            FROM report AS r
+
+            JOIN evidence AS ev
+                ON ev.report_id =
+                   r.report_id
+
+            LEFT JOIN case_event AS evidence_event
+                ON evidence_event.case_event_id =
+                   ev.case_event_id
+
+                AND evidence_event.report_id =
+                    ev.report_id
+
+            WHERE
+                r.report_reference =
+                    :report_reference
+
+                AND r.observer_id =
+                    :observer_id
+
+                AND r.deleted_at IS NULL
+
+                AND ev.evidence_id =
+                    :evidence_id
+
+                AND (
+                    (
+                        ev.case_event_id IS NULL
+
+                        AND (
+                            ev.uploaded_by_user_id IS NULL
+
+                            OR ev.uploaded_by_user_id =
+                               :observer_id
+                        )
+                    )
+
+                    OR
+
+                    (
+                        evidence_event.event_type =
+                            'info_provided'
+
+                        AND ev.uploaded_by_user_id =
+                            :observer_id
+                    )
+                )
+
+            LIMIT 1
+            """
+        ),
+        {
+            "observer_id":
+                observer_id,
+
+            "report_reference":
+                report_reference,
+
+            "evidence_id":
+                evidence_id,
+        },
+    )
+
+    row = result.mappings().first()
+
+    if row is None:
+        return None
+
+    return dict(row)
+
+
 async def get_report_timeline(
     db: AsyncSession,
     *,
@@ -774,7 +1014,6 @@ async def get_report_timeline(
 # This allows both AI systems to suggest a value for the same report field
 # without losing provenance.
 # ---------------------------------------------------------------------------
-
 
 async def save_reviewed_ai_suggestions(
     db: AsyncSession,
@@ -970,7 +1209,6 @@ async def get_reviewed_ai_suggestions(
 # Ownership is enforced in SQL with report.observer_id.
 # ---------------------------------------------------------------------------
 
-
 async def get_observer_related_incident_event(
     db: AsyncSession,
     observer_id: int,
@@ -998,7 +1236,9 @@ async def get_observer_related_incident_event(
             JOIN report_relationship_decision AS d
                 ON (
                     d.report_id = r.report_id
+
                     OR
+
                     d.related_report_id = r.report_id
                 )
 

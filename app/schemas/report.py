@@ -944,19 +944,67 @@ class ObserverContributionSummary(APIModel):
     ) = None
 
 
+# ---------------------------------------------------------------------------
+# Iteration 3 — E6 Observer-owned evidence.
+#
+# This is intentionally a very small public shape.
+#
+# The Observer needs only the evidence id and media type in the report-detail
+# response. The actual private image is loaded through the authenticated
+# Observer evidence endpoint.
+#
+# Never expose:
+# - file_reference
+# - Supabase object keys
+# - uploaded_by_user_id
+# - internal case_event details
+# ---------------------------------------------------------------------------
+
+
+class ObserverEvidenceSummary(APIModel):
+    """
+    Safe metadata for one image the Observer is allowed to
+    see again from their own submitted report.
+
+    Includes:
+    - original report photos
+    - photos supplied in an info_provided reply
+
+    Excludes Coordinator follow-up evidence.
+    """
+
+    evidence_id: int
+
+    media_type: str
+    
+
 class ObserverReportDetailResponse(APIModel):
     """
     Observer-safe detailed tracking view.
 
-    Iteration 3 adds an optional contribution summary
-    derived from already-recorded E5/E7 state while
-    preserving the existing privacy boundary.
+    Iteration 3 adds:
+
+    - an optional contribution summary derived from
+      already-recorded E5/E7 state
+
+    - safe metadata for Observer-owned report evidence
+
+    The evidence list includes:
+
+    - original report photos
+    - photos uploaded by this Observer while responding to
+      an information request
+
+    It deliberately excludes Coordinator follow-up photos
+    and all private storage references.
     """
 
     report_reference: str
+
     threat_category: str
 
     description: str
+
     observed_at: datetime
 
     estimated_depth_metres: (
@@ -975,7 +1023,14 @@ class ObserverReportDetailResponse(APIModel):
 
     evidence_count: int = 0
 
+    evidence: list[
+        ObserverEvidenceSummary
+    ] = Field(
+        default_factory=list
+    )
+
     status: CaseStatus
+
     status_label: str
 
     outcome: (
@@ -994,13 +1049,14 @@ class ObserverReportDetailResponse(APIModel):
     ) = None
 
     closure: (
-        ObserverClosureSummary | None
+        ObserverClosureSummary
+        | None
     ) = None
 
     submitted_at: datetime
 
     last_updated_at: datetime
-
+    
 
 class ObserverTimelineEvent(APIModel):
     """

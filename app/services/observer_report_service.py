@@ -37,6 +37,7 @@ from datetime import date
 from sqlalchemy.exc import (
     SQLAlchemyError,
 )
+
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
@@ -44,19 +45,24 @@ from sqlalchemy.ext.asyncio import (
 from app.core.enums import (
     CaseStatus,
 )
+
 from app.core.exceptions import (
     DatabaseOperationError,
     NotFoundError,
 )
+
 from app.repositories import (
     report_repository,
 )
+
 from app.repositories.location_repository import (
     get_report_location,
 )
+
 from app.schemas.report import (
     ObserverClosureSummary,
     ObserverContributionSummary,
+    ObserverEvidenceSummary,
     ObserverLocationResponse,
     ObserverReportDetailResponse,
     ObserverReportListResponse,
@@ -199,7 +205,6 @@ def get_observer_closure_summary(
 # ---------------------------------------------------------------------------
 # Iteration 3 — E6 contribution projection.
 # ---------------------------------------------------------------------------
-
 
 def build_action_contribution(
     action,
@@ -602,6 +607,7 @@ def build_observer_report_projection(
     report,
     location=None,
     contribution=None,
+    evidence=None,
 ) -> ObserverReportDetailResponse:
     """
     Build the complete Observer-facing report detail.
@@ -613,7 +619,14 @@ def build_observer_report_projection(
 
     Iteration 3 adds:
     - truthful contribution/follow-up summary
+    - Observer-owned evidence metadata
     - no invented conservation outcome
+
+    Evidence includes only:
+    - original report photos
+    - the Observer's own additional-information photos
+
+    Coordinator follow-up evidence is deliberately excluded.
     """
 
     precise_location = None
@@ -659,6 +672,29 @@ def build_observer_report_projection(
         get_observer_contribution_summary(
             report=report,
             action=contribution,
+        )
+    )
+
+    evidence_items = [
+        ObserverEvidenceSummary(
+            evidence_id=row[
+                "evidence_id"
+            ],
+            media_type=row[
+                "media_type"
+            ],
+        )
+        for row in (evidence or [])
+    ]
+
+    evidence_count = (
+        len(evidence_items)
+        if evidence is not None
+        else int(
+            report.get(
+                "evidence_count",
+                0,
+            )
         )
     )
 
@@ -710,12 +746,11 @@ def build_observer_report_projection(
                 precise_location
             ),
 
-            evidence_count=int(
-                report.get(
-                    "evidence_count",
-                    0,
-                )
+            evidence_count=(
+                evidence_count
             ),
+
+            evidence=evidence_items,
 
             status=(
                 report[
@@ -901,6 +936,7 @@ def build_observer_timeline(
 
     # Timeline entries may come from different append-only
     # sources, so restore chronological ordering here.
+
     timeline.sort(
         key=lambda event:
             event.occurred_at
@@ -1061,6 +1097,7 @@ async def list_observer_reports(
                     ]
                 ),
             )
+
             for row in rows
         ]
 
@@ -1097,8 +1134,13 @@ async def get_observer_report(
     Precise location remains independently authorised by
     reefcare_report_location().
 
-    Iteration 3 also loads only the latest valid E7
-    contribution/follow-up record.
+    Iteration 3 also loads:
+    - the latest valid E7 contribution/follow-up
+    - safe metadata for Observer-visible evidence
+
+    Observer evidence includes original report photos and
+    photos the same Observer supplied in an info_provided
+    reply. Coordinator follow-up evidence is excluded.
 
     E6 private Observer feedback does not depend on
     case_action.is_publishable.
@@ -1154,11 +1196,27 @@ async def get_observer_report(
             )
         )
 
+        evidence = (
+            await report_repository
+            .list_observer_report_evidence(
+                db=db,
+
+                observer_id=(
+                    observer_id
+                ),
+
+                report_reference=(
+                    report_reference
+                ),
+            )
+        )
+
         return (
             build_observer_report_projection(
                 report=report,
                 location=location,
                 contribution=contribution,
+                evidence=evidence,
             )
         )
 
@@ -1193,7 +1251,7 @@ async def get_observer_report_timeline(
 
     Iteration 3 adds two optional impact events:
     - confirmed related incident
-    - publishable E7 follow-up
+    - latest valid E7 follow-up
 
     Neither event exposes another Observer or internal case
     information.

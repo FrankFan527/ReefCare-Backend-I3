@@ -11,12 +11,15 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Response,
     UploadFile,
     status,
 )
+
 from pydantic import (
     ValidationError,
 )
+
 from sqlalchemy.exc import (
     DBAPIError,
 )
@@ -24,22 +27,28 @@ from sqlalchemy.exc import (
 from app.api.dependencies.authorization import (
     CurrentObserver,
 )
+
 from app.api.dependencies.db import (
     DatabaseSession,
 )
+
 from app.api.dependencies.rate_limit import (
     smart_report_limiter,
 )
+
 from app.core.enums import (
     CaseStatus,
 )
+
 from app.core.exceptions import (
     DatabaseOperationError,
     NotFoundError,
 )
+
 from app.repositories.reference_repository import (
     get_dive_site_location_reference,
 )
+
 from app.schemas.report import (
     InformationResponseAccepted,
     InformationResponseCreate,
@@ -57,52 +66,66 @@ from app.schemas.report import (
     ReportReviewResponse,
     ReportSubmittedResponse,
 )
+
 from app.schemas.smart_report import (
     SmartReportStructureRequest,
     SmartReportStructureResponse,
 )
+
 from app.schemas.visual_recognition import (
     VisualRecognitionResponse,
 )
+
 from app.services.completeness_service import (
     evaluate_report_completeness,
 )
+
 from app.services.evidence_service import (
     EvidenceStorageError,
     EvidenceTooLargeError,
     EvidenceValidationError,
+    get_observer_evidence_file,
     validate_photo,
 )
+
 from app.services.information_service import (
     get_open_request_for_observer,
     respond_to_information_request,
 )
+
 from app.services.information_reply_photo_service import (
     respond_to_information_request_with_photos,
 )
+
 from app.services.location_service import (
     evaluate_site_distance_warning,
     get_submitted_precise_point,
 )
+
 from app.services.observer_report_service import (
     ObserverReportValidationError,
     get_observer_report,
     get_observer_report_timeline,
     list_observer_reports,
 )
+
 from app.services.report_review_service import (
     review_report,
 )
+
 from app.services.report_service import (
     ReportValidationError,
     submit_report as submit_report_service,
 )
+
 from app.services.smart_report_service import (
     structure_report_description,
 )
+
 from app.services.visual_recognition_service import (
     recognize_visual_threat,
 )
+
 from app.services.related_incident_detection_service import (
     run_related_incident_detection_in_background,
 )
@@ -170,6 +193,7 @@ async def recognize_report_photo(
 
     try:
         content = await validate_photo(photo)
+
     except EvidenceTooLargeError as exc:
         raise HTTPException(
             status_code=(
@@ -177,6 +201,7 @@ async def recognize_report_photo(
             ),
             detail=str(exc),
         ) from exc
+
     except EvidenceValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -381,9 +406,11 @@ async def check_report_location(
             site_reference=(
                 site_reference
             ),
+
             submitted_latitude=(
                 submitted_latitude
             ),
+
             submitted_longitude=(
                 submitted_longitude
             ),
@@ -479,6 +506,98 @@ async def get_report_timeline(
 
 
 @router.get(
+    "/{report_reference}/evidence/{evidence_id}",
+    response_class=Response,
+    responses={
+        200: {
+            "description":
+                "Private Observer-owned evidence image",
+            "content": {
+                "image/jpeg": {},
+                "image/png": {},
+                "image/webp": {},
+            },
+        },
+        401: {
+            "description":
+                "Unauthenticated",
+        },
+        403: {
+            "description":
+                "Wrong application role",
+        },
+        404: {
+            "description":
+                "Report/evidence not found",
+        },
+        500: {
+            "description":
+                "Private evidence could not be loaded",
+        },
+    },
+)
+async def get_my_report_evidence(
+    report_reference: str,
+    evidence_id: int,
+    current_observer: CurrentObserver,
+    db: DatabaseSession,
+):
+    """
+    Return one private image that is visible to the
+    authenticated Observer.
+
+    The storage object key never leaves the backend.
+    Reports/evidence belonging to another Observer, and
+    Coordinator follow-up evidence, are returned as 404.
+    """
+
+    try:
+        evidence_file = (
+            await get_observer_evidence_file(
+                db=db,
+
+                report_reference=(
+                    report_reference
+                ),
+
+                evidence_id=(
+                    evidence_id
+                ),
+
+                observer_id=(
+                    current_observer[
+                        "user_id"
+                    ]
+                ),
+            )
+        )
+
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+            ),
+            detail=str(exc),
+        ) from exc
+
+    except EvidenceStorageError as exc:
+        raise HTTPException(
+            status_code=(
+                status
+                .HTTP_500_INTERNAL_SERVER_ERROR
+            ),
+            detail=(
+                "Unable to load private evidence"
+            ),
+        ) from exc
+
+    return Response(
+        content=evidence_file.content,
+        media_type=evidence_file.content_type,
+    )
+
+
+@router.get(
     "/{report_reference}",
     response_model=(
         ObserverReportDetailResponse
@@ -541,10 +660,13 @@ async def submit_report(
         result = (
             await submit_report_service(
                 db=db,
+
                 observer_id=current_observer[
                     "user_id"
                 ],
+
                 report_data=report_data,
+
                 photos=photos,
             )
         )
@@ -552,12 +674,14 @@ async def submit_report(
         confirmation = ReportSubmittedResponse(
             **result
         )
-        # submit_report_service has committed the report and evidence. The
-        # task runs after the response and opens its own database session.
+
+        # submit_report_service has committed the report and evidence.
+        # The task runs after the response and opens its own database session.
         background_tasks.add_task(
             run_related_incident_detection_in_background,
             confirmation.report_reference,
         )
+
         return confirmation
 
     except ValidationError as exc:
@@ -571,6 +695,7 @@ async def submit_report(
         # Removing validation context preserves the useful
         # location/type/message/input fields while keeping
         # the 422 response JSON-safe.
+
         raise HTTPException(
             status_code=(
                 status
@@ -640,9 +765,11 @@ async def get_open_information_request_for_report(
         the_open_request = (
             await get_open_request_for_observer(
                 db=db,
+
                 report_reference=(
                     report_reference
                 ),
+
                 observer_id=(
                     current_observer[
                         "user_id"
@@ -668,6 +795,7 @@ async def get_open_information_request_for_report(
                 "request_text"
             ]
         ),
+
         requested_at=(
             the_open_request[
                 "requested_at"
@@ -707,12 +835,15 @@ async def submit_information_response(
         the_result = (
             await respond_to_information_request(
                 db=db,
+
                 report_reference=(
                     report_reference
                 ),
+
                 observer_id=(
                     the_observer_id
                 ),
+
                 response_text=(
                     the_response_input
                     .response_text
@@ -822,18 +953,22 @@ async def submit_information_response_with_photos(
         the_result = (
             await respond_to_information_request_with_photos(
                 db=db,
+
                 report_reference=(
                     report_reference
                 ),
+
                 observer_id=(
                     current_observer[
                         "user_id"
                     ]
                 ),
+
                 response_text=(
                     the_response_input
                     .response_text
                 ),
+
                 photos=the_photos,
             )
         )
