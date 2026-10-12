@@ -211,7 +211,7 @@ class Settings(BaseSettings):
     )
 
     smart_report_timeout_seconds: int = Field(
-        default=20,
+        default=25,
         ge=5,
         le=60,
     )
