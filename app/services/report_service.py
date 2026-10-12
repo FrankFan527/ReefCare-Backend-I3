@@ -26,8 +26,12 @@ from app.services.evidence_service import (
     cleanup_private_evidence,
     prepare_evidence_metadata,
     store_private_evidence,
-    validate_photo,
 )
+
+from app.services.image_conversion_service import (
+    prepare_report_photo,
+)
+
 from app.services.location_service import (
     LocationValidationError,
     normalise_observation_location,
@@ -273,73 +277,62 @@ async def _store_evidence_files(
     list[dict[str, Any]],
 ]:
     """
-    Validate and privately store every uploaded photo.
+    Validate, convert, and privately store
+    uploaded report photographs.
 
     evidenceMetadata[i] corresponds to photos[i].
-
-    Metadata is optional so the Iteration 1 submission
-    contract remains valid.
     """
 
     if not photos:
         raise EvidenceValidationError(
-            "At least one photograph "
-            "is required"
+            "At least one photograph is required"
         )
 
     _validate_evidence_metadata_count(
         photos=photos,
-        evidence_metadata=(
-            evidence_metadata
-        ),
+        evidence_metadata=evidence_metadata,
     )
 
-    stored_files: list[
-        StoredEvidence
-    ] = []
+    stored_files: list[StoredEvidence] = []
 
     evidence_items: list[
         dict[str, Any]
     ] = []
 
     try:
-        for index, photo in enumerate(
-            photos
-        ):
-            content = (
-                await validate_photo(
-                    photo
-                )
+
+        for index, photo in enumerate(photos):
+
+            # Validate the image and automatically
+            # convert unsupported formats.
+            prepared_photo = await prepare_report_photo(
+                photo
             )
 
-            stored_file = (
-                await store_private_evidence(
-                    photo=photo,
-                    content=content,
-                )
+            # Store the converted image using its
+            # actual output content type.
+            stored_file = await store_private_evidence(
+                photo=photo,
+                content=prepared_photo.content,
+                content_type=prepared_photo.content_type,
             )
 
             stored_files.append(
                 stored_file
             )
 
+            # Existing evidence metadata processing.
             captured_at = None
 
             if evidence_metadata:
                 captured_at = (
-                    evidence_metadata[
-                        index
-                    ].captured_at
+                    evidence_metadata[index].captured_at
                 )
 
             evidence_items.append(
                 prepare_evidence_metadata(
-                    stored_file=(
-                        stored_file
-                    ),
-                    captured_at=(
-                        captured_at
-                    ),
+                    stored_file=stored_file,
+                    captured_at=captured_at,
                 )
             )
 
@@ -352,6 +345,9 @@ async def _store_evidence_files(
         EvidenceValidationError,
         EvidenceStorageError,
     ):
+
+        # Remove files already uploaded if
+        # a later file fails validation or storage.
         await cleanup_private_evidence(
             stored_files
         )
