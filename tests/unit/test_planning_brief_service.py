@@ -800,3 +800,191 @@ def test_prompt_does_not_contain_coordinates_or_private_fields():
             term
             not in encoded
         )
+
+def site_result(
+    *,
+    band,
+    waves,
+    wind,
+    rain,
+):
+    return SiteComparisonItem(
+        dive_site_id=23,
+
+        site_name="Batu Nisan",
+
+        band=band,
+
+        wave_height_max_m=waves,
+
+        wind_speed_max_kmh=wind,
+
+        precipitation_probability_max_pct=rain,
+
+        reason="Example rule explanation",
+    )
+
+
+def test_mixed_guidance_names_wind_as_the_driver():
+    guidance = service._build_guidance(
+        site_result(
+            band=PlanningBand.MIXED,
+            waves=0.22,
+            wind=18.4,
+            rain=100.0,
+        )
+    )
+
+    assert (
+        guidance["bandLabel"]
+        == "Mixed"
+    )
+
+    assert guidance[
+        "bandDrivers"
+    ][0].startswith(
+        "Wind speed of 18.4 km/h is moderate"
+    )
+
+    assert (
+        "Wave height of 0.22 m is low"
+        in guidance["bandDrivers"][1]
+    )
+
+    rain = guidance[
+        "signals"
+    ]["rain"]
+
+    assert (
+        rain["level"]
+        == "almost certain"
+    )
+
+    assert (
+        rain["affectsBand"]
+        is False
+    )
+
+    assert "visibility" in rain["note"]
+
+    assert (
+        guidance["reefCareSuggestion"]
+        == service.BAND_SUGGESTION[
+            PlanningBand.MIXED
+        ]
+    )
+
+
+def test_less_favourable_guidance_suggests_another_date():
+    guidance = service._build_guidance(
+        site_result(
+            band=PlanningBand.LESS_FAVOURABLE,
+            waves=1.9,
+            wind=10.0,
+            rain=10.0,
+        )
+    )
+
+    assert guidance[
+        "bandDrivers"
+    ][0].startswith(
+        "Wave height of 1.9 m is high"
+    )
+
+    assert (
+        "another date"
+        in guidance["reefCareSuggestion"]
+    )
+
+    assert (
+        "note"
+        not in guidance["signals"]["rain"]
+    )
+
+
+def test_more_favourable_guidance_suggests_planning():
+    guidance = service._build_guidance(
+        site_comparison()
+        .sites[0]
+    )
+
+    assert (
+        guidance["bandLabel"]
+        == "More favourable"
+    )
+
+    assert (
+        "good date"
+        in guidance["reefCareSuggestion"]
+    )
+
+    assert (
+        guidance["signals"]["waves"]["level"]
+        == "low"
+    )
+
+    assert (
+        guidance["signals"]["wind"]["level"]
+        == "light"
+    )
+
+
+def test_brief_facts_include_purpose_and_report_invite():
+    facts = service._build_facts(
+        planning_context=(
+            planning_context()
+        ),
+
+        site_result=(
+            site_comparison()
+            .sites[0]
+        ),
+
+        public_context=(
+            no_public_context()
+        ),
+
+        planned_date=(
+            PLANNED_DATE
+        ),
+    )
+
+    guidance = facts["guidance"]
+
+    assert (
+        guidance["reefContextPurpose"]
+        == service.REEF_CONTEXT_PURPOSE
+    )
+
+    assert (
+        "report it in ReefCare"
+        in guidance["reportingInvite"]
+    )
+
+
+def test_prompt_asks_for_three_explained_paragraphs():
+    instruction = service._provider_payload(
+        {}
+    )["system_instruction"]
+
+    for lead_in in (
+        "Why this is",
+        "What this means:",
+        "Reef activity:",
+    ):
+        assert lead_in in instruction
+
+    assert (
+        "exactly three short paragraphs"
+        in instruction
+    )
+
+    assert (
+        "never give permission or clearance"
+        in instruction.lower()
+    )
+
+    assert (
+        "never attach a threat category"
+        in instruction
+    )

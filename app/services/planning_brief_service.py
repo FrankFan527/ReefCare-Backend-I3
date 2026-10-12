@@ -67,6 +67,309 @@ MAX_PUBLIC_THREAT_ITEMS: int = 5
 MAX_BRIEF_LENGTH: int = 3000
 
 
+BAND_LABELS: dict[PlanningBand, str] = {
+    PlanningBand.MORE_FAVOURABLE:
+        "More favourable",
+    PlanningBand.MIXED:
+        "Mixed",
+    PlanningBand.LESS_FAVOURABLE:
+        "Less favourable",
+}
+
+# What each band means for a recreational diver, and the
+# planning suggestion ReefCare stands behind. These are
+# fixed by the backend so the model cannot soften or
+# strengthen them.
+BAND_MEANING: dict[PlanningBand, str] = {
+    PlanningBand.MORE_FAVOURABLE: (
+        "The forecast is generally calm, so the weather "
+        "adds little extra difficulty to this dive."
+    ),
+    PlanningBand.MIXED: (
+        "The forecast is not severe, but conditions are "
+        "moderate: boat rides, entries, exits and surface "
+        "waits may be rougher, which matters most for "
+        "newer divers."
+    ),
+    PlanningBand.LESS_FAVOURABLE: (
+        "The forecast is rough, which makes the dive "
+        "noticeably harder and raises weather-related "
+        "risk, especially at the surface."
+    ),
+}
+
+BAND_SUGGESTION: dict[PlanningBand, str] = {
+    PlanningBand.MORE_FAVOURABLE: (
+        "ReefCare suggests this is a good date to plan a "
+        "dive here, as long as the site suits your "
+        "experience."
+    ),
+    PlanningBand.MIXED: (
+        "ReefCare suggests the dive can still be planned "
+        "with caution: it is better suited to divers "
+        "comfortable in moderate conditions, and newer "
+        "divers may prefer a calmer date."
+    ),
+    PlanningBand.LESS_FAVOURABLE: (
+        "ReefCare suggests choosing another date or site "
+        "if you can."
+    ),
+}
+
+REEF_CONTEXT_PURPOSE: str = (
+    "ReefCare shows these records so divers know what has "
+    "been reported at this site and what to look out for "
+    "underwater. They are past records, not a live survey "
+    "of the reef."
+)
+
+REPORTING_INVITE: str = (
+    "If you spot ghost fishing gear, marine debris, coral "
+    "damage or anything unusual on your dive, report it "
+    "in ReefCare so it can be reviewed."
+)
+
+
+def _format_number(
+    value: float,
+) -> str:
+    return f"{value:g}"
+
+
+def _graded_signal(
+    *,
+    value: float | None,
+    unit: str,
+    calm_max: float,
+    rough_above: float,
+    levels: tuple[str, str, str],
+) -> dict:
+    """
+    Place one band-driving signal against the same
+    thresholds used by planning_condition_service.
+    """
+
+    if value is None:
+        return {
+            "value": None,
+            "level": "unknown",
+            "zone": None,
+            "affectsBand": True,
+        }
+
+    if value <= calm_max:
+        level = levels[0]
+        zone = "more_favourable"
+    elif value <= rough_above:
+        level = levels[1]
+        zone = "mixed"
+    else:
+        level = levels[2]
+        zone = "less_favourable"
+
+    return {
+        "value":
+            f"{_format_number(value)} {unit}",
+
+        "level":
+            level,
+
+        "zone":
+            zone,
+
+        "affectsBand":
+            True,
+
+        "thresholds": (
+            f"more favourable up to "
+            f"{_format_number(calm_max)} {unit}; "
+            f"less favourable above "
+            f"{_format_number(rough_above)} {unit}"
+        ),
+    }
+
+
+def _rain_signal(
+    value: float | None,
+) -> dict:
+    """
+    Rainfall stays factual context only. It does not
+    change the band until the team approves a rule.
+    """
+
+    if value is None:
+        return {
+            "value": None,
+            "level": "unknown",
+            "affectsBand": False,
+        }
+
+    if value >= 90:
+        level = "almost certain"
+    elif value >= 60:
+        level = "likely"
+    elif value >= 30:
+        level = "possible"
+    else:
+        level = "unlikely"
+
+    signal = {
+        "value":
+            f"{_format_number(value)}%",
+
+        "level":
+            level,
+
+        "affectsBand":
+            False,
+    }
+
+    if value >= 60:
+        signal["note"] = (
+            "Rain can reduce underwater visibility and "
+            "make boat rides and surface waits less "
+            "comfortable."
+        )
+
+    return signal
+
+
+def _band_drivers(
+    *,
+    band: PlanningBand,
+    waves: dict,
+    wind: dict,
+) -> list[str]:
+    """
+    Name the signal(s) that put the site in its band.
+    """
+
+    signals = (
+        ("Wave height", waves),
+        ("Wind speed", wind),
+    )
+
+    def describe(
+        name: str,
+        signal: dict,
+    ) -> str:
+        if signal["value"] is None:
+            return f"{name} is not available."
+
+        return (
+            f"{name} of {signal['value']} is "
+            f"{signal['level']} "
+            f"({signal['thresholds']})."
+        )
+
+    if band == PlanningBand.MORE_FAVOURABLE:
+        return [
+            describe(name, signal)
+            for name, signal in signals
+        ]
+
+    drivers = [
+        describe(name, signal)
+        for name, signal in signals
+        if signal["zone"] == band.value
+    ]
+
+    others = [
+        describe(name, signal)
+        for name, signal in signals
+        if signal["zone"] != band.value
+    ]
+
+    return drivers + others
+
+
+def _build_guidance(
+    site_result,
+) -> dict:
+    """
+    Deterministic plain-language reading of the forecast.
+
+    The model explains this guidance; it does not decide
+    it.
+    """
+
+    band = site_result.band
+
+    waves = _graded_signal(
+        value=site_result.wave_height_max_m,
+        unit="m",
+        calm_max=(
+            settings
+            .planning_wave_more_favourable_max_m
+        ),
+        rough_above=(
+            settings
+            .planning_wave_less_favourable_above_m
+        ),
+        levels=(
+            "low",
+            "moderate",
+            "high",
+        ),
+    )
+
+    wind = _graded_signal(
+        value=site_result.wind_speed_max_kmh,
+        unit="km/h",
+        calm_max=(
+            settings
+            .planning_wind_more_favourable_max_kmh
+        ),
+        rough_above=(
+            settings
+            .planning_wind_less_favourable_above_kmh
+        ),
+        levels=(
+            "light",
+            "moderate",
+            "strong",
+        ),
+    )
+
+    return {
+        "bandLabel":
+            BAND_LABELS[band],
+
+        "bandDrivers":
+            _band_drivers(
+                band=band,
+                waves=waves,
+                wind=wind,
+            ),
+
+        "signals": {
+            "waves":
+                waves,
+
+            "wind":
+                wind,
+
+            "rain":
+                _rain_signal(
+                    site_result
+                    .precipitation_probability_max_pct
+                ),
+        },
+
+        "whatThisMeans":
+            BAND_MEANING[band],
+
+        "reefCareSuggestion":
+            BAND_SUGGESTION[band],
+
+        "reefContextPurpose":
+            REEF_CONTEXT_PURPOSE,
+
+        "reportingInvite":
+            REPORTING_INVITE,
+    }
+
+
 def _malaysia_now() -> datetime:
     return datetime.now(
         ZoneInfo(
@@ -111,29 +414,51 @@ def _provider_payload(
 
         "system_instruction": (
             "You write a short ReefCare MY dive-planning "
-            "brief from facts supplied by the backend. "
-            "Use only the supplied facts. Never invent "
-            "weather, sea conditions, reef condition, "
-            "wildlife observations, coordinates, dates, "
-            "or conservation activity. Do not describe "
-            "the conditions as safe or unsafe and do not "
+            "brief that helps a recreational diver decide "
+            "whether to plan this dive. Use only the "
+            "supplied facts. Never invent weather, sea "
+            "conditions, reef condition, wildlife "
+            "observations, coordinates, dates, or "
+            "conservation activity. "
+            "Write exactly three short paragraphs separated "
+            "by one blank line, in plain English. "
+            "Paragraph 1 starts with \"Why this is "
+            "<guidance.bandLabel>:\" and explains the band "
+            "from guidance.bandDrivers, quoting the actual "
+            "wave height, wind speed and rain chance. Rain "
+            "is not part of the band; mention it as a "
+            "separate consideration using "
+            "guidance.signals.rain. "
+            "Paragraph 2 starts with \"What this means:\" "
+            "and restates guidance.whatThisMeans and then "
+            "guidance.reefCareSuggestion in plain words. "
+            "Keep the direction of the suggestion exactly "
+            "as given; do not make it more or less "
+            "encouraging. Never call the dive safe or "
+            "unsafe, never guarantee conditions, and never "
             "give permission or clearance to dive. "
-            "Planning bands are contextual indicators, "
-            "not safety assessments. Public ReefCare "
-            "context is historical and contextual and "
-            "must not be presented as the current "
-            "condition of the reef. Accepted observations "
-            "describe reviewed ReefCare records, not a "
-            "complete survey of the site. Reports still "
-            "under review must not be treated as confirmed "
-            "threats. If no public ReefCare context is "
-            "available, do not infer that the reef is "
-            "healthy, unaffected, or free of threats. "
-            "Write plain English for a recreational diver. "
-            "Produce at most two short paragraphs. "
-            "Do not use headings, bullet points, markdown, "
-            "or disclaimers that introduce facts not "
-            "present in the input."
+            "Paragraph 3 starts with \"Reef activity:\" "
+            "and summarises publicReefContext, then "
+            "explains guidance.reefContextPurpose and ends "
+            "with guidance.reportingInvite. Public ReefCare "
+            "context is historical and must not be "
+            "presented as the current condition of the "
+            "reef. Accepted observations describe reviewed "
+            "ReefCare records, not a complete survey of the "
+            "site. Reports still under review must not be "
+            "treated as confirmed threats. Threat "
+            "categories come only from accepted "
+            "observations: state the number under review "
+            "as a separate count in its own sentence, and "
+            "never attach a threat category, threat type "
+            "or the word \"regarding\" to reports under "
+            "review. If no public "
+            "ReefCare context is available, say so and do "
+            "not infer that the reef is healthy, "
+            "unaffected, or free of threats. "
+            "Do not use headings, bullet points or "
+            "markdown, and do not add disclaimers; the "
+            "page already shows one."
         ),
 
         "input":
@@ -302,7 +627,7 @@ def _normalise_brief_text(
 ) -> str:
     """
     Keep the provider output compact while preserving the
-    blank line between its two possible paragraphs.
+    blank lines between its paragraphs.
     """
 
     cleaned = value.strip()
@@ -465,6 +790,11 @@ def _build_facts(
             "ruleExplanation":
                 site_result.reason,
         },
+
+        "guidance":
+            _build_guidance(
+                site_result
+            ),
 
         "publicReefContext": {
             "state":
