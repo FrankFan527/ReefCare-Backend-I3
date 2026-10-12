@@ -423,24 +423,29 @@ async def store_private_evidence(
     *,
     photo: UploadFile,
     content: bytes,
+    content_type: str | None = None,
 ) -> StoredEvidence:
     """
-    Store validated evidence in the private Supabase
-    Storage bucket.
+    Store validated evidence in the private
+    Supabase Storage bucket.
 
-    The returned file_reference is an opaque private
-    storage object key, not a public URL.
+    Supports original and converted images.
+
+    The returned file_reference is an opaque
+    private storage object key.
     """
 
+    # Use converted content type if provided.
+    # Otherwise use original uploaded content type.
     content_type = (
-        photo.content_type
+        content_type
+        or photo.content_type
         or ""
     ).lower()
 
-    extension = (
-        ALLOWED_PHOTO_TYPES.get(
-            content_type
-        )
+    # Determine file extension.
+    extension = ALLOWED_PHOTO_TYPES.get(
+        content_type
     )
 
     if extension is None:
@@ -448,6 +453,7 @@ async def store_private_evidence(
             "Unsupported photo type"
         )
 
+    # Generate a unique storage object key.
     object_key = (
         f"evidence/"
         f"{uuid4().hex}"
@@ -455,47 +461,40 @@ async def store_private_evidence(
     )
 
     def upload_object():
-        client = (
-            _get_supabase_client()
-        )
+
+        client = _get_supabase_client()
 
         return (
             client
             .storage
             .from_(
-                settings
-                .supabase_storage_bucket
+                settings.supabase_storage_bucket
             )
             .upload(
                 path=object_key,
                 file=content,
                 file_options={
-                    "content-type":
-                        content_type,
-
-                    "upsert":
-                        "false",
+                    "content-type": content_type,
+                    "upsert": "false",
                 },
             )
         )
 
     try:
+
         await run_in_threadpool(
             upload_object
         )
 
     except Exception as exc:
+
         raise EvidenceStorageError(
             "Unable to store private evidence"
         ) from exc
 
     return StoredEvidence(
         file_reference=object_key,
-
-        file_size_bytes=len(
-            content
-        ),
-
+        file_size_bytes=len(content),
         content_type=content_type,
     )
 
