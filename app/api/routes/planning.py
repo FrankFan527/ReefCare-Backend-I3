@@ -155,7 +155,7 @@ async def create_planning_brief(
     US9.4 generate an optional AI-written planning brief.
 
     The endpoint remains public, but requests are
-    rate-limited independently before Gemini-backed work
+    rate-limited independently before AI-backed work
     begins.
 
     The client supplies only site/date intent. Forecast and

@@ -38,7 +38,7 @@ class SmartReportFollowUpQuestion(APIModel):
     """
     One bounded, predefined clarification question.
 
-    Gemini identifies which supported values are absent;
+    The AI provider identifies which supported values are absent;
     ReefCare owns the wording and permitted answers so this
     never becomes an unrestricted AI conversation.
     """

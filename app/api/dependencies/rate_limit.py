@@ -187,7 +187,7 @@ async def apply_planning_brief_rate_limit(
     request: Request,
 ) -> None:
     """
-    Protect the public Gemini-backed Planning Brief
+    Protect the public AI-backed Planning Brief
     endpoint from unbounded repeated requests.
 
     Rate-limit failure is handled through the existing

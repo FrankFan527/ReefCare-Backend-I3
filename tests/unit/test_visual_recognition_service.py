@@ -26,7 +26,7 @@ async def test_returns_non_blocking_fallback_without_api_key(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         None,
     )
 
@@ -49,7 +49,7 @@ async def test_maps_supported_model_output_to_suggestion(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         SecretStr("test-key"),
     )
     monkeypatch.setattr(
@@ -87,7 +87,7 @@ async def test_unsupported_or_uncertain_output_is_unsure(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         SecretStr("test-key"),
     )
     monkeypatch.setattr(
@@ -122,7 +122,7 @@ async def test_invalid_provider_output_is_unavailable(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         SecretStr("test-key"),
     )
     monkeypatch.setattr(
@@ -149,13 +149,17 @@ def test_provider_payload_contains_inline_image_only():
         content_type="image/png",
     )
 
-    assert payload["model"] == "gemini-3.1-flash-lite"
-    assert payload["input"][1] == {
-        "type": "image",
-        "data": base64.b64encode(
-            b"reef-image"
-        ).decode("ascii"),
-        "mime_type": "image/png",
+    assert payload["model"] == "deepseek-flash"
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["messages"][1]["content"][1] == {
+        "type": "image_url",
+        "image_url": {
+            "url": "data:image/png;base64," + base64.b64encode(
+                b"reef-image"
+            ).decode("ascii"),
+            "detail": "high",
+        },
     }
     encoded = json.dumps(payload).lower()
     assert "latitude" not in encoded
@@ -164,13 +168,13 @@ def test_provider_payload_contains_inline_image_only():
     assert "observer" in encoded
 
 
-def test_posts_to_existing_gemini_interactions_endpoint(
+def test_posts_to_deepseek_chat_completions_endpoint(
     monkeypatch,
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
-        SecretStr("gemini-test-key"),
+        "deepseek_api_key",
+        SecretStr("deepseek-test-key"),
     )
     captured = {}
 
@@ -190,13 +194,18 @@ def test_posts_to_existing_gemini_interactions_endpoint(
 
     provider_request = captured["request"]
     assert provider_request.full_url == (
-        "https://generativelanguage.googleapis.com/"
-        "v1beta/interactions"
+        "https://api.deepseek.com/chat/completions"
     )
     assert provider_request.get_header(
-        "X-goog-api-key"
-    ) == "gemini-test-key"
-    assert "gemini-test-key" not in (
+        "Authorization"
+    ) == "Bearer deepseek-test-key"
+    assert "deepseek-test-key" not in (
         provider_request.full_url
     )
     assert result["status"] == "completed"
+
+
+def test_extracts_deepseek_chat_completion():
+    assert visual_recognition_service._extract_output_text({
+        "choices": [{"message": {"content": '{"threat_code": null}'}}],
+    }) == '{"threat_code": null}'

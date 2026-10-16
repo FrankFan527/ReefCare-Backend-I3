@@ -370,7 +370,7 @@ def test_planning_brief_rate_limit_returns_429(
     QA-E9-03.
 
     Public Planning Brief requests must be bounded before
-    repeated calls can continue reaching Gemini-backed
+    repeated calls can continue reaching AI-backed
     planning work.
     """
 

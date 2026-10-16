@@ -21,7 +21,7 @@ The application is built with **FastAPI** and **PostgreSQL on Neon**, with priva
 - **pwdlib[argon2]**
 - **Supabase Storage**
 - **python-multipart 0.0.32**
-- **Google Gemini API** for selected AI-assisted features
+- **DeepSeek API** for selected AI-assisted features
 - **Vercel** for backend deployment
 
 ---
@@ -169,8 +169,9 @@ SUPABASE_URL=<supabase project url>
 SUPABASE_SECRET_KEY=<supabase secret>
 SUPABASE_STORAGE_BUCKET=reefcare-evidence
 
-GEMINI_API_KEY=<gemini api key>
-GEMINI_MODEL=<configured model>
+DEEPSEEK_API_KEY=<deepseek api key>
+DEEPSEEK_MODEL=deepseek-flash
+DEEPSEEK_BASE_URL=https://api.deepseek.com
 ```
 
 ### Database Connection
@@ -188,10 +189,11 @@ rather than a synchronous `psycopg2` connection.
 ### Important
 
 - Never commit `.env`.
-- Never commit database passwords, JWT secrets, Gemini API keys, or Supabase secrets.
+- Never commit database passwords, JWT secrets, DeepSeek API keys, or Supabase secrets.
 - Production deployment should use `APP_ENV=production`.
 - Application traffic should use the restricted ReefCare application database role rather than the Neon owner account.
 - Environment-variable changes on Vercel require a redeployment before they take effect.
+- Before deploying the DeepSeek migration, set `DEEPSEEK_API_KEY` as a private Vercel environment variable and redeploy. Keep the old provider key until the new AI flows have been verified in the deployed environment.
 
 ---
 
@@ -988,7 +990,7 @@ This includes:
 Database passwords
 JWT secrets
 Supabase secret keys
-Gemini API keys
+DeepSeek API keys
 Private evidence object keys
 Restricted precise coordinates
 Internal Coordinator-only notes
@@ -1203,7 +1205,7 @@ FastAPI backend
 Supabase private evidence storage
 ```
 
-AI-assisted features use the configured Gemini service where enabled.
+AI-assisted features use the configured DeepSeek service where enabled.
 
 ---
 

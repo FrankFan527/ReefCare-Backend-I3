@@ -196,19 +196,12 @@ class Settings(BaseSettings):
     )
 
     # -----------------------------------------------------------------
-    # Epic 4 Smart Report Structuring / Visual Recognition.
+    # Shared AI provider for E4 and the E9 Planning Brief.
     # -----------------------------------------------------------------
 
-    gemini_api_key: SecretStr | None = None
-
-    gemini_model: str = (
-        "gemini-3.1-flash-lite"
-    )
-
-    gemini_base_url: str = (
-        "https://generativelanguage.googleapis.com/"
-        "v1beta"
-    )
+    deepseek_api_key: SecretStr | None = None
+    deepseek_model: str = "deepseek-flash"
+    deepseek_base_url: str = "https://api.deepseek.com"
 
     smart_report_timeout_seconds: int = Field(
         default=25,
@@ -285,7 +278,7 @@ class Settings(BaseSettings):
         le=55,
     )
 
-    # Planning Brief is public and Gemini-backed, so it
+    # Planning Brief is public and AI-backed, so it
     # has its own limiter rather than sharing the
     # authenticated Smart Report / Visual Recognition bucket.
     planning_brief_rate_limit_requests: int = Field(

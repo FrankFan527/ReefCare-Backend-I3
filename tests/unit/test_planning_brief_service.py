@@ -408,7 +408,7 @@ async def test_missing_ai_configuration_is_non_blocking(
 
     monkeypatch.setattr(
         service.settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         None,
     )
 
@@ -474,7 +474,7 @@ async def test_generated_brief_uses_backend_resolved_facts(
 
     monkeypatch.setattr(
         service.settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         FakeSecret(),
     )
 
@@ -530,11 +530,7 @@ async def test_generated_brief_uses_backend_resolved_facts(
         is not None
     )
 
-    provider_input = (
-        captured_payload[
-            "input"
-        ]
-    )
+    provider_input = captured_payload["messages"][1]["content"]
 
     assert (
         "Mini Mount"
@@ -610,7 +606,7 @@ async def test_provider_failure_returns_unavailable(
 
     monkeypatch.setattr(
         service.settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         FakeSecret(),
     )
 
@@ -692,7 +688,7 @@ async def test_no_public_context_is_still_safe_for_ai(
 
     monkeypatch.setattr(
         service.settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         FakeSecret(),
     )
 
@@ -734,11 +730,7 @@ async def test_no_public_context_is_still_safe_for_ai(
         == "generated"
     )
 
-    provider_input = (
-        captured_payload[
-            "input"
-        ]
-    )
+    provider_input = captured_payload["messages"][1]["content"]
 
     assert (
         "no_public_context"
@@ -963,9 +955,10 @@ def test_brief_facts_include_purpose_and_report_invite():
 
 
 def test_prompt_asks_for_three_explained_paragraphs():
-    instruction = service._provider_payload(
-        {}
-    )["system_instruction"]
+    payload = service._provider_payload({})
+    instruction = payload["messages"][0]["content"]
+    assert payload["model"] == "deepseek-flash"
+    assert payload["thinking"] == {"type": "disabled"}
 
     for lead_in in (
         "Why this is",
@@ -988,3 +981,14 @@ def test_prompt_asks_for_three_explained_paragraphs():
         "never attach a threat category"
         in instruction
     )
+
+
+def test_extracts_deepseek_chat_completion():
+    assert service._extract_output_text({
+        "choices": [{"message": {
+            "content": (
+                "Why this is more favourable:\n\n"
+                "What this means:\n\nReef activity:"
+            ),
+        }}],
+    }).startswith("Why this is")

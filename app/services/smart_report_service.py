@@ -151,8 +151,9 @@ _OUTPUT_SCHEMA = {
 
 def _provider_payload(description: str) -> dict:
     return {
-        "model": settings.gemini_model,
-        "system_instruction": (
+        "model": settings.deepseek_model,
+        "messages": [
+            {"role": "system", "content": (
             "You assist a Malaysian reef observer in "
             "structuring a report. Extract only details "
             "explicitly stated in the description. Never "
@@ -167,25 +168,27 @@ def _provider_payload(description: str) -> dict:
             "Return null instead of 'not specified' for any "
             "value that is not explicitly supported. Do not "
             "create follow-up questions; ReefCare selects a "
-            "small predefined question set after extraction."
-        ),
-        "input": description,
-        "response_format": {
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": _OUTPUT_SCHEMA,
-        },
+            "small predefined question set after extraction. "
+            "Return only a JSON object with every field in this "
+            "schema, using null for absent values: "
+            + json.dumps(_OUTPUT_SCHEMA)
+            )},
+            {"role": "user", "content": description},
+        ],
+        "response_format": {"type": "json_object"},
+        "thinking": {"type": "disabled"},
+        "max_tokens": 512,
     }
 
 
 def _post_json(payload: dict) -> dict:
-    api_key = settings.gemini_api_key
+    api_key = settings.deepseek_api_key
     if api_key is None:
         raise RuntimeError("AI provider is not configured")
 
     endpoint = (
-        settings.gemini_base_url.rstrip("/")
-        + "/interactions"
+        settings.deepseek_base_url.rstrip("/")
+        + "/chat/completions"
     )
     encoded = json.dumps(payload).encode("utf-8")
     provider_request = request.Request(
@@ -193,7 +196,7 @@ def _post_json(payload: dict) -> dict:
         data=encoded,
         method="POST",
         headers={
-            "x-goog-api-key": api_key.get_secret_value(),
+            "Authorization": "Bearer " + api_key.get_secret_value(),
             "Content-Type": "application/json",
         },
     )
@@ -210,24 +213,23 @@ def _post_json(payload: dict) -> dict:
 
 
 def _extract_output_text(provider_response: dict) -> str:
+    choices = provider_response.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0]
+        if isinstance(choice, dict):
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content
     direct = provider_response.get("output_text")
     if isinstance(direct, str) and direct.strip():
         return direct
-
     for step in provider_response.get("steps", []):
-        if (
-            not isinstance(step, dict)
-            or step.get("type") != "model_output"
-        ):
-            continue
-        for content in step.get("content", []):
-            if (
-                isinstance(content, dict)
-                and content.get("type") == "text"
-                and isinstance(content.get("text"), str)
-            ):
-                return content["text"]
-
+        if isinstance(step, dict) and step.get("type") == "model_output":
+            for content in step.get("content", []):
+                if isinstance(content, dict) and isinstance(content.get("text"), str):
+                    return content["text"]
     raise ValueError("AI provider returned no text output")
 
 
@@ -309,7 +311,7 @@ def _select_follow_up_questions(
     """
     Return no more than two high-value clarifications.
 
-    Gemini's null structured values identify what is absent.
+    The model's null structured values identify what is absent.
     ReefCare then chooses wording and answer choices from a
     controlled set associated with the likely threat.
     """
@@ -341,7 +343,7 @@ def _select_follow_up_questions(
 async def structure_report_description(
     description: str,
 ) -> SmartReportStructureResponse:
-    if settings.gemini_api_key is None:
+    if settings.deepseek_api_key is None:
         return SmartReportStructureResponse(
             available=False,
             message=(
