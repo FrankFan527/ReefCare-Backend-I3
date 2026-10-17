@@ -19,7 +19,7 @@
 # E8 shared public-safe site context
 #       |
 #       v
-# constrained Gemini summary
+# constrained DeepSeek summary
 #
 # AI/provider failure is non-blocking and returns
 # status="unavailable" with HTTP 200.
@@ -400,7 +400,7 @@ def _provider_payload(
     facts: dict,
 ) -> dict:
     """
-    Build a tightly constrained Gemini request.
+    Build a tightly constrained DeepSeek request.
 
     All factual input has already been resolved by ReefCare.
 
@@ -410,9 +410,9 @@ def _provider_payload(
 
     return {
         "model":
-            settings.gemini_model,
+            settings.deepseek_model,
 
-        "system_instruction": (
+        "messages": [{"role": "system", "content": (
             "You write a short ReefCare MY dive-planning "
             "brief that helps a recreational diver decide "
             "whether to plan this dive. Use only the "
@@ -459,18 +459,14 @@ def _provider_payload(
             "Do not use headings, bullet points or "
             "markdown, and do not add disclaimers; the "
             "page already shows one."
-        ),
-
-        "input":
+        )}, {"role": "user", "content":
             json.dumps(
                 facts,
                 ensure_ascii=False,
                 default=str,
-            ),
-
-        "response_format": {
-            "type": "text",
-        },
+            )}],
+        "thinking": {"type": "disabled"},
+        "max_tokens": 650,
     }
 
 
@@ -478,7 +474,7 @@ def _post_json(
     payload: dict,
 ) -> dict:
     """
-    Perform the blocking Gemini request.
+    Perform the blocking DeepSeek request.
 
     Called only through asyncio.to_thread().
 
@@ -489,7 +485,7 @@ def _post_json(
     """
 
     api_key = (
-        settings.gemini_api_key
+        settings.deepseek_api_key
     )
 
     if api_key is None:
@@ -499,9 +495,9 @@ def _post_json(
 
     endpoint = (
         settings
-        .gemini_base_url
+        .deepseek_base_url
         .rstrip("/")
-        + "/interactions"
+        + "/chat/completions"
     )
 
     encoded = json.dumps(
@@ -518,8 +514,8 @@ def _post_json(
         method="POST",
 
         headers={
-            "x-goog-api-key":
-                api_key.get_secret_value(),
+            "Authorization":
+                "Bearer " + api_key.get_secret_value(),
 
             "Content-Type":
                 "application/json",
@@ -546,76 +542,21 @@ def _extract_output_text(
     provider_response: dict,
 ) -> str:
     """
-    Support the same Gemini interactions response forms
-    already used by Smart Report Structuring.
+    Read the text from a DeepSeek chat completion.
     """
 
-    direct = (
-        provider_response
-        .get(
-            "output_text"
-        )
-    )
-
-    if (
-        isinstance(
-            direct,
-            str,
-        )
-        and direct.strip()
-    ):
+    choices = provider_response.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0]
+        if isinstance(choice, dict):
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
+    direct = provider_response.get("output_text")
+    if isinstance(direct, str) and direct.strip():
         return direct.strip()
-
-    for step in (
-        provider_response
-        .get(
-            "steps",
-            [],
-        )
-    ):
-        if (
-            not isinstance(
-                step,
-                dict,
-            )
-            or step.get(
-                "type"
-            )
-            != "model_output"
-        ):
-            continue
-
-        for content in (
-            step.get(
-                "content",
-                [],
-            )
-        ):
-            if (
-                isinstance(
-                    content,
-                    dict,
-                )
-                and content.get(
-                    "type"
-                )
-                == "text"
-                and isinstance(
-                    content.get(
-                        "text"
-                    ),
-                    str,
-                )
-                and content[
-                    "text"
-                ].strip()
-            ):
-                return (
-                    content[
-                        "text"
-                    ]
-                    .strip()
-                )
 
     raise ValueError(
         "AI provider returned no text output"
@@ -722,7 +663,7 @@ def _build_facts(
     planned_date: date,
 ) -> dict:
     """
-    Construct the only facts Gemini is allowed to use.
+    Construct the only facts the AI provider is allowed to use.
 
     E8 is the single authority for ReefCare public-safe
     site context.
@@ -847,7 +788,7 @@ async def generate_planning_brief(
     ReefCare history/context comes only from the shared E8
     public-safe boundary.
 
-    Missing/out-of-horizon conditions and any Gemini
+    Missing/out-of-horizon conditions and any AI
     provider failure return the normal unavailable shape,
     not HTTP 500.
     """
@@ -943,7 +884,7 @@ async def generate_planning_brief(
     )
 
     if (
-        settings.gemini_api_key
+        settings.deepseek_api_key
         is None
     ):
         return _unavailable_response(

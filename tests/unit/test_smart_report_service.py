@@ -25,7 +25,7 @@ async def test_returns_manual_fallback_without_api_key(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         None,
     )
 
@@ -47,7 +47,7 @@ async def test_maps_valid_model_output_to_reviewable_suggestions(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         SecretStr("test-key"),
     )
     model_output = {
@@ -125,7 +125,7 @@ async def test_uses_not_specified_instead_of_guessing_threat(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         SecretStr("test-key"),
     )
     monkeypatch.setattr(
@@ -170,7 +170,7 @@ async def test_skips_follow_up_for_information_already_extracted(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         SecretStr("test-key"),
     )
     monkeypatch.setattr(
@@ -208,7 +208,7 @@ async def test_uses_controlled_question_for_physical_damage(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         SecretStr("test-key"),
     )
     monkeypatch.setattr(
@@ -261,15 +261,14 @@ def test_provider_payload_excludes_photos_and_location():
         "Plastic debris beside the coral."
     )
 
-    assert payload["input"] == (
+    assert payload["messages"][1]["content"] == (
         "Plastic debris beside the coral."
     )
     assert payload["model"] == (
-        "gemini-3.1-flash-lite"
+        "deepseek-flash"
     )
-    assert payload["response_format"]["mime_type"] == (
-        "application/json"
-    )
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["thinking"] == {"type": "disabled"}
     encoded = json.dumps(payload).lower()
     assert "image_url" not in encoded
     assert "latitude" not in encoded
@@ -277,13 +276,13 @@ def test_provider_payload_excludes_photos_and_location():
     assert "do not create follow-up questions" in encoded
 
 
-def test_posts_to_gemini_interactions_with_secret_header(
+def test_posts_to_deepseek_chat_completions_with_secret_header(
     monkeypatch,
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
-        SecretStr("gemini-test-key"),
+        "deepseek_api_key",
+        SecretStr("deepseek-test-key"),
     )
     captured = {}
 
@@ -302,16 +301,21 @@ def test_posts_to_gemini_interactions_with_secret_header(
 
     provider_request = captured["request"]
     assert provider_request.full_url == (
-        "https://generativelanguage.googleapis.com/"
-        "v1beta/interactions"
+        "https://api.deepseek.com/chat/completions"
     )
     assert provider_request.get_header(
-        "X-goog-api-key"
-    ) == "gemini-test-key"
-    assert "gemini-test-key" not in (
+        "Authorization"
+    ) == "Bearer deepseek-test-key"
+    assert "deepseek-test-key" not in (
         provider_request.full_url
     )
     assert result["status"] == "completed"
+
+
+def test_extracts_deepseek_chat_completion():
+    assert smart_report_service._extract_output_text({
+        "choices": [{"message": {"content": '{"possible_threat": null}'}}],
+    }) == '{"possible_threat": null}'
 
 
 @pytest.mark.asyncio
@@ -320,7 +324,7 @@ async def test_invalid_provider_output_falls_back_safely(
 ):
     monkeypatch.setattr(
         settings,
-        "gemini_api_key",
+        "deepseek_api_key",
         SecretStr("test-key"),
     )
     monkeypatch.setattr(

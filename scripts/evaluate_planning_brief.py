@@ -540,7 +540,7 @@ def apply_manual_review(
 
 
 # ---------------------------------------------------------------------------
-# Actual Gemini execution
+# Actual DeepSeek execution
 # ---------------------------------------------------------------------------
 
 
@@ -556,11 +556,11 @@ async def generate_actual_brief(
     """
 
     if (
-        settings.gemini_api_key
+        settings.deepseek_api_key
         is None
     ):
         raise RuntimeError(
-            "GEMINI_API_KEY is not configured. "
+            "DEEPSEEK_API_KEY is not configured. "
             "Add it to .env before running the "
             "Planning Brief evaluation."
         )
@@ -1187,8 +1187,8 @@ async def main():
     )
 
     print(
-        f"Gemini model: "
-        f"{settings.gemini_model}"
+        f"DeepSeek model: "
+        f"{settings.deepseek_model}"
     )
 
     print(
@@ -1522,7 +1522,7 @@ async def main():
 
         "model":
             settings
-            .gemini_model,
+            .deepseek_model,
 
         "scenarioCount":
             len(
