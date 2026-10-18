@@ -586,10 +586,12 @@ async def test_provider_failure_returns_unavailable_instead_of_raising(
     )
 
     assert (
-        "provider"
-        in result.sites[0]
-        .reason.lower()
+    result.sites[0].reason
+    == (
+        "Forecast service is temporarily unavailable. "
+        "Please try again later."
     )
+)
 
 
 @pytest.mark.asyncio

@@ -68,6 +68,11 @@ from app.services.planning_provider_service import (
 
 MAX_TRAVEL_WINDOW_DAYS: int = 14
 
+FORECAST_PROVIDER_UNAVAILABLE_MESSAGE = (
+    "Forecast service is temporarily unavailable. "
+    "Please try again later."
+)
+
 
 def _malaysia_timezone() -> ZoneInfo:
     return ZoneInfo(
@@ -360,10 +365,7 @@ def get_site_day_result(
             PlanningBand.UNAVAILABLE,
             None,
             [
-                (
-                    "Forecast provider data is "
-                    "currently unavailable."
-                )
+                FORECAST_PROVIDER_UNAVAILABLE_MESSAGE
             ],
         )
 
@@ -654,10 +656,7 @@ async def compare_travel_dates(
                     signals=None,
 
                     reasons=[
-                        (
-                            "Live forecast assessment "
-                            "is currently unavailable."
-                        )
+                        FORECAST_PROVIDER_UNAVAILABLE_MESSAGE
                     ],
                 )
             )
@@ -973,8 +972,7 @@ async def compare_sites_for_date(
                     precipitation_probability_max_pct=None,
 
                     reason=(
-                        "Live forecast assessment "
-                        "is currently unavailable."
+                        FORECAST_PROVIDER_UNAVAILABLE_MESSAGE
                     ),
                 )
             )
