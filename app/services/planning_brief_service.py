@@ -67,66 +67,86 @@ MAX_PUBLIC_THREAT_ITEMS: int = 5
 MAX_BRIEF_LENGTH: int = 3000
 
 
-BAND_LABELS: dict[PlanningBand, str] = {
+BAND_LABELS: dict[
+    PlanningBand,
+    str,
+] = {
     PlanningBand.MORE_FAVOURABLE:
         "More favourable",
+
     PlanningBand.MIXED:
         "Mixed",
+
     PlanningBand.LESS_FAVOURABLE:
         "Less favourable",
 }
 
-# What each band means for a recreational diver, and the
-# planning suggestion ReefCare stands behind. These are
-# fixed by the backend so the model cannot soften or
-# strengthen them.
-BAND_MEANING: dict[PlanningBand, str] = {
+
+# ---------------------------------------------------------------------------
+# Deterministic planning meaning.
+#
+# These statements are fixed by the backend. The AI may
+# restate them in simpler language but must not change the
+# direction of the guidance.
+# ---------------------------------------------------------------------------
+
+BAND_MEANING: dict[
+    PlanningBand,
+    str,
+] = {
     PlanningBand.MORE_FAVOURABLE: (
-        "The forecast is generally calm, so the weather "
-        "adds little extra difficulty to this dive."
+        "Wave and wind conditions are relatively calm "
+        "for planning this dive."
     ),
+
     PlanningBand.MIXED: (
-        "The forecast is not severe, but conditions are "
-        "moderate: boat rides, entries, exits and surface "
-        "waits may be rougher, which matters most for "
-        "newer divers."
+        "Wave or wind conditions are moderate, so this "
+        "dive may need more careful planning."
     ),
+
     PlanningBand.LESS_FAVOURABLE: (
-        "The forecast is rough, which makes the dive "
-        "noticeably harder and raises weather-related "
-        "risk, especially at the surface."
+        "Wave or wind conditions are rougher, making "
+        "this date less favourable for planning."
     ),
 }
 
-BAND_SUGGESTION: dict[PlanningBand, str] = {
+
+BAND_SUGGESTION: dict[
+    PlanningBand,
+    str,
+] = {
     PlanningBand.MORE_FAVOURABLE: (
-        "ReefCare suggests this is a good date to plan a "
-        "dive here, as long as the site suits your "
-        "experience."
+        "ReefCare suggests this is a more favourable "
+        "date to plan the dive, while still considering "
+        "the separate rain information and whether the "
+        "site suits the diver's experience."
     ),
+
     PlanningBand.MIXED: (
-        "ReefCare suggests the dive can still be planned "
-        "with caution: it is better suited to divers "
-        "comfortable in moderate conditions, and newer "
-        "divers may prefer a calmer date."
+        "ReefCare suggests planning with caution. "
+        "Divers who are less comfortable in moderate "
+        "conditions may prefer a calmer date."
     ),
+
     PlanningBand.LESS_FAVOURABLE: (
-        "ReefCare suggests choosing another date or site "
-        "if you can."
+        "ReefCare suggests considering another date "
+        "or site if possible."
     ),
 }
+
 
 REEF_CONTEXT_PURPOSE: str = (
-    "ReefCare shows these records so divers know what has "
-    "been reported at this site and what to look out for "
-    "underwater. They are past records, not a live survey "
-    "of the reef."
+    "These are historical ReefCare records that help "
+    "divers understand what has previously been reported "
+    "at the site. They are not a live survey or statement "
+    "of the reef's current condition."
 )
 
+
 REPORTING_INVITE: str = (
-    "If you spot ghost fishing gear, marine debris, coral "
-    "damage or anything unusual on your dive, report it "
-    "in ReefCare so it can be reviewed."
+    "If you notice ghost fishing gear, marine debris, "
+    "coral damage or anything unusual during the dive, "
+    "you can report it in ReefCare for review."
 )
 
 
@@ -142,27 +162,46 @@ def _graded_signal(
     unit: str,
     calm_max: float,
     rough_above: float,
-    levels: tuple[str, str, str],
+    levels: tuple[
+        str,
+        str,
+        str,
+    ],
 ) -> dict:
     """
-    Place one band-driving signal against the same
-    thresholds used by planning_condition_service.
+    Classify one band-driving signal using the same
+    thresholds as planning_condition_service.
+
+    Threshold values remain internal. They are used to
+    determine the signal zone but are deliberately not
+    exposed as prose facts to the AI, because the public
+    Planning Brief should explain the current result rather
+    than reproduce ReefCare's internal rule table.
     """
 
     if value is None:
         return {
-            "value": None,
-            "level": "unknown",
-            "zone": None,
-            "affectsBand": True,
+            "value":
+                None,
+
+            "level":
+                "unknown",
+
+            "zone":
+                None,
+
+            "affectsBand":
+                True,
         }
 
     if value <= calm_max:
         level = levels[0]
         zone = "more_favourable"
+
     elif value <= rough_above:
         level = levels[1]
         zone = "mixed"
+
     else:
         level = levels[2]
         zone = "less_favourable"
@@ -179,13 +218,6 @@ def _graded_signal(
 
         "affectsBand":
             True,
-
-        "thresholds": (
-            f"more favourable up to "
-            f"{_format_number(calm_max)} {unit}; "
-            f"less favourable above "
-            f"{_format_number(rough_above)} {unit}"
-        ),
     }
 
 
@@ -193,27 +225,37 @@ def _rain_signal(
     value: float | None,
 ) -> dict:
     """
-    Rainfall stays factual context only. It does not
-    change the band until the team approves a rule.
+    Rainfall stays factual context only.
+
+    Rain does not change the deterministic planning band
+    until ReefCare explicitly adopts a rain-based rule.
     """
 
     if value is None:
         return {
-            "value": None,
-            "level": "unknown",
-            "affectsBand": False,
+            "value":
+                None,
+
+            "level":
+                "unknown",
+
+            "affectsBand":
+                False,
         }
 
     if value >= 90:
-        level = "almost certain"
-    elif value >= 60:
-        level = "likely"
-    elif value >= 30:
-        level = "possible"
-    else:
-        level = "unlikely"
+        level = "very high"
 
-    signal = {
+    elif value >= 60:
+        level = "high"
+
+    elif value >= 30:
+        level = "moderate"
+
+    else:
+        level = "low"
+
+    return {
         "value":
             f"{_format_number(value)}%",
 
@@ -224,15 +266,6 @@ def _rain_signal(
             False,
     }
 
-    if value >= 60:
-        signal["note"] = (
-            "Rain can reduce underwater visibility and "
-            "make boat rides and surface waits less "
-            "comfortable."
-        )
-
-    return signal
-
 
 def _band_drivers(
     *,
@@ -241,71 +274,141 @@ def _band_drivers(
     wind: dict,
 ) -> list[str]:
     """
-    Name the signal(s) that put the site in its band.
+    Describe the current band-driving signals without
+    repeating the complete threshold table.
+
+    This keeps the public AI brief concise and avoids
+    apparently contradictory wording such as explaining a
+    More favourable result while also repeating a
+    "less favourable above ..." rule.
     """
 
     signals = (
-        ("Wave height", waves),
-        ("Wind speed", wind),
+        (
+            "Wave height",
+            waves,
+        ),
+        (
+            "Wind speed",
+            wind,
+        ),
     )
 
     def describe(
         name: str,
         signal: dict,
     ) -> str:
-        if signal["value"] is None:
-            return f"{name} is not available."
+        if (
+            signal[
+                "value"
+            ]
+            is None
+        ):
+            return (
+                f"{name} is unavailable."
+            )
 
         return (
-            f"{name} of {signal['value']} is "
-            f"{signal['level']} "
-            f"({signal['thresholds']})."
+            f"{name} is "
+            f"{signal['value']} "
+            f"and is rated "
+            f"{signal['level']}."
         )
 
-    if band == PlanningBand.MORE_FAVOURABLE:
+    if (
+        band
+        == PlanningBand.MORE_FAVOURABLE
+    ):
         return [
-            describe(name, signal)
-            for name, signal in signals
+            describe(
+                name,
+                signal,
+            )
+            for (
+                name,
+                signal,
+            )
+            in signals
         ]
 
     drivers = [
-        describe(name, signal)
-        for name, signal in signals
-        if signal["zone"] == band.value
+        describe(
+            name,
+            signal,
+        )
+
+        for (
+            name,
+            signal,
+        )
+        in signals
+
+        if (
+            signal[
+                "zone"
+            ]
+            == band.value
+        )
     ]
 
     others = [
-        describe(name, signal)
-        for name, signal in signals
-        if signal["zone"] != band.value
+        describe(
+            name,
+            signal,
+        )
+
+        for (
+            name,
+            signal,
+        )
+        in signals
+
+        if (
+            signal[
+                "zone"
+            ]
+            != band.value
+        )
     ]
 
-    return drivers + others
+    return (
+        drivers
+        + others
+    )
 
 
 def _build_guidance(
     site_result,
 ) -> dict:
     """
-    Deterministic plain-language reading of the forecast.
+    Build deterministic plain-language guidance.
 
-    The model explains this guidance; it does not decide
-    it.
+    The AI explains this guidance; it does not decide or
+    recalculate the planning band.
     """
 
-    band = site_result.band
+    band = (
+        site_result.band
+    )
 
     waves = _graded_signal(
-        value=site_result.wave_height_max_m,
+        value=(
+            site_result
+            .wave_height_max_m
+        ),
+
         unit="m",
+
         calm_max=(
             settings
             .planning_wave_more_favourable_max_m
         ),
+
         rough_above=(
             settings
             .planning_wave_less_favourable_above_m
         ),
+
         levels=(
             "low",
             "moderate",
@@ -314,16 +417,23 @@ def _build_guidance(
     )
 
     wind = _graded_signal(
-        value=site_result.wind_speed_max_kmh,
+        value=(
+            site_result
+            .wind_speed_max_kmh
+        ),
+
         unit="km/h",
+
         calm_max=(
             settings
             .planning_wind_more_favourable_max_kmh
         ),
+
         rough_above=(
             settings
             .planning_wind_less_favourable_above_kmh
         ),
+
         levels=(
             "light",
             "moderate",
@@ -333,7 +443,9 @@ def _build_guidance(
 
     return {
         "bandLabel":
-            BAND_LABELS[band],
+            BAND_LABELS[
+                band
+            ],
 
         "bandDrivers":
             _band_drivers(
@@ -357,10 +469,14 @@ def _build_guidance(
         },
 
         "whatThisMeans":
-            BAND_MEANING[band],
+            BAND_MEANING[
+                band
+            ],
 
         "reefCareSuggestion":
-            BAND_SUGGESTION[band],
+            BAND_SUGGESTION[
+                band
+            ],
 
         "reefContextPurpose":
             REEF_CONTEXT_PURPOSE,
@@ -373,7 +489,8 @@ def _build_guidance(
 def _malaysia_now() -> datetime:
     return datetime.now(
         ZoneInfo(
-            settings.planning_timezone
+            settings
+            .planning_timezone
         )
     )
 
@@ -389,9 +506,17 @@ def _unavailable_response(
 
     return PlanningBriefResponse(
         site_id=site_id,
-        planned_date=planned_date,
-        status="unavailable",
+
+        planned_date=(
+            planned_date
+        ),
+
+        status=(
+            "unavailable"
+        ),
+
         text=None,
+
         generated_at=None,
     )
 
@@ -410,63 +535,143 @@ def _provider_payload(
 
     return {
         "model":
-            settings.deepseek_model,
+            settings
+            .deepseek_model,
 
-        "messages": [{"role": "system", "content": (
-            "You write a short ReefCare MY dive-planning "
-            "brief that helps a recreational diver decide "
-            "whether to plan this dive. Use only the "
-            "supplied facts. Never invent weather, sea "
-            "conditions, reef condition, wildlife "
-            "observations, coordinates, dates, or "
-            "conservation activity. "
-            "Write exactly three short paragraphs separated "
-            "by one blank line, in plain English. "
-            "Paragraph 1 starts with \"Why this is "
-            "<guidance.bandLabel>:\" and explains the band "
-            "from guidance.bandDrivers, quoting the actual "
-            "wave height, wind speed and rain chance. Rain "
-            "is not part of the band; mention it as a "
-            "separate consideration using "
-            "guidance.signals.rain. "
-            "Paragraph 2 starts with \"What this means:\" "
-            "and restates guidance.whatThisMeans and then "
-            "guidance.reefCareSuggestion in plain words. "
-            "Keep the direction of the suggestion exactly "
-            "as given; do not make it more or less "
-            "encouraging. Never call the dive safe or "
-            "unsafe, never guarantee conditions, and never "
-            "give permission or clearance to dive. "
-            "Paragraph 3 starts with \"Reef activity:\" "
-            "and summarises publicReefContext, then "
-            "explains guidance.reefContextPurpose and ends "
-            "with guidance.reportingInvite. Public ReefCare "
-            "context is historical and must not be "
-            "presented as the current condition of the "
-            "reef. Accepted observations describe reviewed "
-            "ReefCare records, not a complete survey of the "
-            "site. Reports still under review must not be "
-            "treated as confirmed threats. Threat "
-            "categories come only from accepted "
-            "observations: state the number under review "
-            "as a separate count in its own sentence, and "
-            "never attach a threat category, threat type "
-            "or the word \"regarding\" to reports under "
-            "review. If no public "
-            "ReefCare context is available, say so and do "
-            "not infer that the reef is healthy, "
-            "unaffected, or free of threats. "
-            "Do not use headings, bullet points or "
-            "markdown, and do not add disclaimers; the "
-            "page already shows one."
-        )}, {"role": "user", "content":
-            json.dumps(
-                facts,
-                ensure_ascii=False,
-                default=str,
-            )}],
-        "thinking": {"type": "disabled"},
-        "max_tokens": 650,
+        "messages": [
+            {
+                "role":
+                    "system",
+
+                "content": (
+                    "You write a short ReefCare MY "
+                    "dive-planning brief for a "
+                    "recreational diver. "
+
+                    "Use only the supplied facts. "
+                    "Never invent weather, sea "
+                    "conditions, reef condition, "
+                    "wildlife observations, coordinates, "
+                    "dates, conservation activity, "
+                    "threats or safety conclusions. "
+
+                    "The planning band has already been "
+                    "calculated by ReefCare's deterministic "
+                    "backend rules. Do not recalculate it, "
+                    "question it or introduce another band. "
+
+                    "Write exactly three short paragraphs "
+                    "separated by one blank line. "
+                    "Use clear, natural English suitable "
+                    "for a public website. Keep the whole "
+                    "brief concise. "
+
+                    "Paragraph 1 must start with "
+                    "\"Why this is "
+                    "<guidance.bandLabel>:\". "
+                    "Briefly explain the selected band "
+                    "using guidance.bandDrivers and the "
+                    "actual wave and wind values. "
+                    "Do not repeat threshold ranges, "
+                    "internal rule boundaries, or phrases "
+                    "such as \"more favourable up to\" or "
+                    "\"less favourable above\". "
+                    "Do not put technical rule explanations "
+                    "inside brackets or parentheses. "
+
+                    "Mention rain once only as a separate "
+                    "consideration. Use the actual rain "
+                    "chance and its simple level from "
+                    "guidance.signals.rain. "
+                    "Do not imply that rain changes the "
+                    "planning band. "
+                    "For example, say that rain chance is "
+                    "high and should be considered "
+                    "separately. Do not explain internal "
+                    "rain classification rules. "
+
+                    "Paragraph 2 must start with "
+                    "\"What this means:\". "
+                    "Explain guidance.whatThisMeans and "
+                    "guidance.reefCareSuggestion in simple "
+                    "practical language. "
+                    "Keep the direction of the suggestion "
+                    "exactly as supplied. "
+                    "Do not contradict the selected band. "
+                    "Never call the dive safe or unsafe. "
+                    "Never guarantee conditions, give "
+                    "permission, approval or clearance to "
+                    "dive. "
+
+                    "Paragraph 3 must start with "
+                    "\"Reef activity:\". "
+                    "Summarise only the most relevant "
+                    "publicReefContext. "
+                    "Keep this paragraph concise. "
+
+                    "Threat categories may come only from "
+                    "accepted observations. "
+                    "Reports still under review must be "
+                    "reported only as a separate count and "
+                    "must not be treated as confirmed "
+                    "threats. "
+                    "Never attach a threat category, threat "
+                    "type, or the word \"regarding\" to "
+                    "reports under review. "
+
+                    "If there is no reviewed public "
+                    "ReefCare information, simply say that "
+                    "no reviewed ReefCare information is "
+                    "currently available for the site. "
+                    "Do not infer that the reef is healthy, "
+                    "unaffected or free of threats. "
+
+                    "Make clear in one short sentence that "
+                    "the ReefCare records are historical "
+                    "context and not the reef's current "
+                    "condition. "
+                    "End with a short version of "
+                    "guidance.reportingInvite. "
+
+                    "Do not reproduce database field names, "
+                    "internal codes, ruleExplanation, "
+                    "threshold tables or configuration "
+                    "values. "
+
+                    "Do not use markdown headings, bullet "
+                    "points, numbered lists or additional "
+                    "sections. "
+                    "The required paragraph starters are "
+                    "plain text labels, not markdown "
+                    "headings. "
+
+                    "Do not add a disclaimer because the "
+                    "page already displays one."
+                ),
+            },
+            {
+                "role":
+                    "user",
+
+                "content":
+                    json.dumps(
+                        facts,
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+            },
+        ],
+
+        "thinking": {
+            "type":
+                "disabled",
+        },
+
+        "max_tokens":
+            520,
+
+        "temperature":
+            0.2,
     }
 
 
@@ -485,7 +690,8 @@ def _post_json(
     """
 
     api_key = (
-        settings.deepseek_api_key
+        settings
+        .deepseek_api_key
     )
 
     if api_key is None:
@@ -500,26 +706,35 @@ def _post_json(
         + "/chat/completions"
     )
 
-    encoded = json.dumps(
-        payload
-    ).encode(
-        "utf-8"
+    encoded = (
+        json.dumps(
+            payload
+        )
+        .encode(
+            "utf-8"
+        )
     )
 
-    provider_request = request.Request(
-        endpoint,
+    provider_request = (
+        request.Request(
+            endpoint,
 
-        data=encoded,
+            data=encoded,
 
-        method="POST",
+            method="POST",
 
-        headers={
-            "Authorization":
-                "Bearer " + api_key.get_secret_value(),
+            headers={
+                "Authorization":
+                    (
+                        "Bearer "
+                        + api_key
+                        .get_secret_value()
+                    ),
 
-            "Content-Type":
-                "application/json",
-        },
+                "Content-Type":
+                    "application/json",
+            },
+        )
     )
 
     with request.urlopen(
@@ -534,7 +749,9 @@ def _post_json(
         return json.loads(
             provider_response
             .read()
-            .decode("utf-8")
+            .decode(
+                "utf-8"
+            )
         )
 
 
@@ -545,18 +762,72 @@ def _extract_output_text(
     Read the text from a DeepSeek chat completion.
     """
 
-    choices = provider_response.get("choices")
-    if isinstance(choices, list) and choices:
-        choice = choices[0]
-        if isinstance(choice, dict):
-            message = choice.get("message")
-            if isinstance(message, dict):
-                content = message.get("content")
-                if isinstance(content, str) and content.strip():
-                    return content.strip()
-    direct = provider_response.get("output_text")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
+    choices = (
+        provider_response
+        .get(
+            "choices"
+        )
+    )
+
+    if (
+        isinstance(
+            choices,
+            list,
+        )
+        and choices
+    ):
+        choice = (
+            choices[0]
+        )
+
+        if isinstance(
+            choice,
+            dict,
+        ):
+            message = (
+                choice.get(
+                    "message"
+                )
+            )
+
+            if isinstance(
+                message,
+                dict,
+            ):
+                content = (
+                    message.get(
+                        "content"
+                    )
+                )
+
+                if (
+                    isinstance(
+                        content,
+                        str,
+                    )
+                    and content.strip()
+                ):
+                    return (
+                        content.strip()
+                    )
+
+    direct = (
+        provider_response
+        .get(
+            "output_text"
+        )
+    )
+
+    if (
+        isinstance(
+            direct,
+            str,
+        )
+        and direct.strip()
+    ):
+        return (
+            direct.strip()
+        )
 
     raise ValueError(
         "AI provider returned no text output"
@@ -571,7 +842,9 @@ def _normalise_brief_text(
     blank lines between its paragraphs.
     """
 
-    cleaned = value.strip()
+    cleaned = (
+        value.strip()
+    )
 
     if not cleaned:
         raise ValueError(
@@ -579,7 +852,9 @@ def _normalise_brief_text(
         )
 
     if (
-        len(cleaned)
+        len(
+            cleaned
+        )
         > MAX_BRIEF_LENGTH
     ):
         cleaned = (
@@ -606,21 +881,29 @@ def _build_public_threats(
     return [
         {
             "threatCategoryCode":
-                threat.threat_category_code,
+                threat
+                .threat_category_code,
 
             "threatCategoryLabel":
-                threat.threat_category_label,
+                threat
+                .threat_category_label,
 
             "acceptedReportCount":
-                threat.accepted_report_count,
+                threat
+                .accepted_report_count,
 
             "mostRecentMonth":
-                threat.most_recent_month,
+                threat
+                .most_recent_month,
         }
+
         for threat
-        in public_context.threats[
-            :MAX_PUBLIC_THREAT_ITEMS
-        ]
+        in (
+            public_context
+            .threats[
+                :MAX_PUBLIC_THREAT_ITEMS
+            ]
+        )
     ]
 
 
@@ -634,24 +917,33 @@ def _build_public_activity(
     return [
         {
             "activityType":
-                item.activity_type,
+                item
+                .activity_type,
 
             "title":
-                item.title,
+                item
+                .title,
 
             "summary":
-                item.summary,
+                item
+                .summary,
 
             "activityDate":
-                item.activity_date,
+                item
+                .activity_date,
 
             "sourceLabel":
-                item.source_label,
+                item
+                .source_label,
         }
+
         for item
-        in public_context.activity[
-            :MAX_PUBLIC_ACTIVITY_ITEMS
-        ]
+        in (
+            public_context
+            .activity[
+                :MAX_PUBLIC_ACTIVITY_ITEMS
+            ]
+        )
     ]
 
 
@@ -714,7 +1006,9 @@ def _build_facts(
 
         "conditions": {
             "band":
-                site_result.band.value,
+                site_result
+                .band
+                .value,
 
             "waveHeightMaxM":
                 site_result
@@ -728,8 +1022,13 @@ def _build_facts(
                 site_result
                 .precipitation_probability_max_pct,
 
+            # This deterministic explanation is retained for
+            # backend traceability. The prompt explicitly
+            # forbids the model from reproducing internal rule
+            # language or threshold tables.
             "ruleExplanation":
-                site_result.reason,
+                site_result
+                .reason,
         },
 
         "guidance":
@@ -788,68 +1087,100 @@ async def generate_planning_brief(
     ReefCare history/context comes only from the shared E8
     public-safe boundary.
 
-    Missing/out-of-horizon conditions and any AI
-    provider failure return the normal unavailable shape,
-    not HTTP 500.
+    Missing/out-of-horizon conditions and any AI provider
+    failure return the normal unavailable shape, not HTTP
+    500.
     """
 
     planning_context = (
-        await get_planning_context_for_site(
-            db=db,
-            dive_site_id=site_id,
+        await (
+            get_planning_context_for_site(
+                db=db,
+
+                dive_site_id=(
+                    site_id
+                ),
+            )
         )
     )
 
-    if planning_context is None:
+    if (
+        planning_context
+        is None
+    ):
         raise NotFoundError(
             "Dive site not found"
         )
 
     site_comparison = (
-        await compare_sites_for_date(
-            db=db,
+        await (
+            compare_sites_for_date(
+                db=db,
 
-            area_code=(
-                planning_context[
-                    "area_code"
-                ]
-            ),
+                area_code=(
+                    planning_context[
+                        "area_code"
+                    ]
+                ),
 
-            requested_date=(
-                planned_date
-            ),
+                requested_date=(
+                    planned_date
+                ),
+            )
         )
     )
 
     selected_site = next(
         (
             item
+
             for item
-            in site_comparison.sites
+            in (
+                site_comparison
+                .sites
+            )
+
             if (
-                item.dive_site_id
+                item
+                .dive_site_id
                 == site_id
             )
         ),
         None,
     )
 
-    if selected_site is None:
-        return _unavailable_response(
-            site_id=site_id,
-            planned_date=planned_date,
+    if (
+        selected_site
+        is None
+    ):
+        return (
+            _unavailable_response(
+                site_id=site_id,
+
+                planned_date=(
+                    planned_date
+                ),
+            )
         )
 
     # No AI prose is generated when ReefCare itself has no
     # factual environmental assessment to summarise.
-    if selected_site.band in {
-        PlanningBand.UNAVAILABLE,
-        PlanningBand.OUT_OF_HORIZON,
-        PlanningBand.NOT_ASSESSABLE,
-    }:
-        return _unavailable_response(
-            site_id=site_id,
-            planned_date=planned_date,
+    if (
+        selected_site.band
+        in {
+            PlanningBand.UNAVAILABLE,
+            PlanningBand.OUT_OF_HORIZON,
+            PlanningBand.NOT_ASSESSABLE,
+        }
+    ):
+        return (
+            _unavailable_response(
+                site_id=site_id,
+
+                planned_date=(
+                    planned_date
+                ),
+            )
         )
 
     # E8 is the single source of public-safe ReefCare site
@@ -859,37 +1190,50 @@ async def generate_planning_brief(
     # privacy eligibility rules before anything reaches the
     # Planning Brief prompt.
     public_context = (
-        await get_public_site_context(
-            db=db,
-            dive_site_id=site_id,
+        await (
+            get_public_site_context(
+                db=db,
+
+                dive_site_id=(
+                    site_id
+                ),
+            )
         )
     )
 
-    facts = _build_facts(
-        planning_context=(
-            planning_context
-        ),
+    facts = (
+        _build_facts(
+            planning_context=(
+                planning_context
+            ),
 
-        site_result=(
-            selected_site
-        ),
+            site_result=(
+                selected_site
+            ),
 
-        public_context=(
-            public_context
-        ),
+            public_context=(
+                public_context
+            ),
 
-        planned_date=(
-            planned_date
-        ),
+            planned_date=(
+                planned_date
+            ),
+        )
     )
 
     if (
-        settings.deepseek_api_key
+        settings
+        .deepseek_api_key
         is None
     ):
-        return _unavailable_response(
-            site_id=site_id,
-            planned_date=planned_date,
+        return (
+            _unavailable_response(
+                site_id=site_id,
+
+                planned_date=(
+                    planned_date
+                ),
+            )
         )
 
     try:
@@ -897,6 +1241,7 @@ async def generate_planning_brief(
             await asyncio.wait_for(
                 asyncio.to_thread(
                     _post_json,
+
                     _provider_payload(
                         facts
                     ),
@@ -919,15 +1264,21 @@ async def generate_planning_brief(
         )
 
         return PlanningBriefResponse(
-            site_id=site_id,
+            site_id=(
+                site_id
+            ),
 
             planned_date=(
                 planned_date
             ),
 
-            status="generated",
+            status=(
+                "generated"
+            ),
 
-            text=brief_text,
+            text=(
+                brief_text
+            ),
 
             generated_at=(
                 _malaysia_now()
@@ -943,7 +1294,12 @@ async def generate_planning_brief(
         RuntimeError,
         OSError,
     ):
-        return _unavailable_response(
-            site_id=site_id,
-            planned_date=planned_date,
+        return (
+            _unavailable_response(
+                site_id=site_id,
+
+                planned_date=(
+                    planned_date
+                ),
+            )
         )

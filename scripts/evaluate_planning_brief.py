@@ -103,6 +103,9 @@ MARKDOWN_OR_LIST_PATTERNS = [
 ]
 
 
+EXPECTED_PARAGRAPH_COUNT = 3
+
+
 NUMBER_PATTERN = re.compile(
     r"(?<![\w.])-?\d+(?:\.\d+)?"
 )
@@ -338,8 +341,8 @@ def paragraph_count(
     text: str,
 ) -> int:
     """
-    Production Planning Brief prompt allows at most two
-    short paragraphs.
+    Production Planning Brief prompt requires exactly
+    three short paragraphs.
     """
 
     paragraphs = [
@@ -356,6 +359,45 @@ def paragraph_count(
 
     return len(
         paragraphs
+    )
+
+
+def evaluate_format_compliance(
+    text: str,
+) -> tuple[
+    bool,
+    int,
+    list[str],
+]:
+    """
+    Check the current production Planning Brief format.
+
+    The production prompt requires exactly three short
+    paragraphs separated by blank lines, with no markdown
+    headings, bullet points, or numbered lists.
+    """
+
+    paragraphs = paragraph_count(
+        text
+    )
+
+    format_matches = (
+        find_regex_matches(
+            text,
+            MARKDOWN_OR_LIST_PATTERNS,
+        )
+    )
+
+    compliant = (
+        paragraphs
+        == EXPECTED_PARAGRAPH_COUNT
+        and not format_matches
+    )
+
+    return (
+        compliant,
+        paragraphs,
+        format_matches,
     )
 
 
@@ -580,7 +622,7 @@ async def generate_actual_brief(
 
             timeout=(
                 settings
-                .smart_report_timeout_seconds
+                .planning_brief_timeout_seconds
                 + 2
             ),
         )
@@ -788,17 +830,12 @@ async def evaluate_scenario(
         )
     )
 
-    format_matches = (
-        find_regex_matches(
-            output,
-            MARKDOWN_OR_LIST_PATTERNS,
-        )
-    )
-
-    paragraphs = (
-        paragraph_count(
-            output
-        )
+    (
+        format_compliant,
+        paragraphs,
+        format_matches,
+    ) = evaluate_format_compliance(
+        output
     )
 
     unexpected_numbers = (
@@ -825,10 +862,7 @@ async def evaluate_scenario(
             not unexpected_numbers,
 
         "formatCompliant":
-            (
-                paragraphs <= 2
-                and not format_matches
-            ),
+            format_compliant,
     }
 
     scored_checks = [
@@ -1200,6 +1234,13 @@ async def main():
         "\nThis evaluation uses controlled trusted "
         "backend facts and the actual production "
         "Planning Brief prompt/provider path."
+    )
+
+    print(
+        "Format contract: exactly "
+        f"{EXPECTED_PARAGRAPH_COUNT} short paragraphs; "
+        "no markdown headings, bullet points, or "
+        "numbered lists."
     )
 
     rows = []

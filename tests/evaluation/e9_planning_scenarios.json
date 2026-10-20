@@ -387,8 +387,6 @@
           ]
         ],
         "forbidden_phrases": [
-          "confirmed threat",
-          "confirmed threats",
           "accepted threat",
           "accepted threats",
           "verified threat",

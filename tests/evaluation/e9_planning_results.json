@@ -1,8 +1,8 @@
 {
   "summary": {
     "evaluation": "E9 Dive Planning Brief Evaluation",
-    "generatedAt": "2026-10-08T09:31:51.502067+00:00",
-    "model": "gemini-3.1-flash-lite",
+    "generatedAt": "2026-10-20T12:14:10.149881+00:00",
+    "model": "deepseek-flash",
     "scenarioCount": 10,
     "completedScenarioCount": 10,
     "passedScenarioCount": 10,
@@ -72,7 +72,7 @@
         }
       },
       "expectedResult": "The brief should describe the more favourable planning band, use only the supplied weather and ReefCare facts, mention the reviewed marine debris context or conservation activity, and avoid saying that the site is safe to dive.",
-      "aiOutput": "The planning band for Mini Mount on Tioman Island on 2026-10-10 is more favourable, with wind speeds reaching up to 9.0 km/h, wave heights up to 0.6 meters, and a 20 percent probability of precipitation. These conditions fall within the more favourable ReefCare planning thresholds.\n\nReefCare records for this site include two accepted observations regarding marine debris, with the most recent report from September 2026. One additional observation remains under review. Conservation activity at this site includes a debris collection event conducted on 24 July 2026, where discarded material was removed.",
+      "aiOutput": "Why this is more favourable: Wave height is forecast to peak at 0.6 m and wind speed at 9.0 km/h, which are the values behind this planning band. Rain chance is 20%, a low level, and should be considered separately.\n\nWhat this means: The forecast wave and wind values sit within the more favourable planning band, so plan your dive around these expected conditions. ReefCare suggests checking the latest forecast before you head out and confirming conditions on site with your operator.\n\nReef activity: ReefCare records for Mini Mount include one reviewed threat category, marine debris, based on two accepted reports, most recently in September 2026, plus one published conservation activity, a debris collection on 24 July 2026. One further report is still under review and is not counted as a confirmed threat. These ReefCare records are historical context and not the reef's current condition. If you notice something worth reporting, share it with ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -101,7 +101,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -156,7 +156,7 @@
         }
       },
       "expectedResult": "The brief should clearly describe the planning assessment as mixed and may mention the reviewed coral bleaching context. It must not turn the mixed band into a safety judgement.",
-      "aiOutput": "For the dive at Vietnamese Wreck in the Perhentian Islands on October 11, 2026, the planning signals are mixed. Forecasts indicate maximum wave heights of 1.1 meters, wind speeds reaching 11 km/h, and a 55 percent probability of precipitation. These indicators do not fall within the same planning band, resulting in a mixed outlook for the day.\n\nReefCare records for this site include one reviewed observation regarding coral bleaching, which was most recently reported in August 2026. There are no additional reports currently under review for this location.",
+      "aiOutput": "Why this is mixed: The planning band is mixed because the wave and wind values do not point the same way. Wave height is expected to reach up to 1.1 m and wind speed up to 11 km/h. Rain chance is high at 55% and should be considered separately.\n\nWhat this means: Conditions are mixed, so it is worth planning around both the wave and wind signals rather than treating the day as straightforward. The ReefCare suggestion is to check the latest local conditions before you commit to a dive plan.\n\nReef activity: ReefCare holds one reviewed threat category for this site, coral bleaching, based on one accepted report most recently from August 2026. These ReefCare records are historical context and not the reef's current condition. If you have observations from this site, consider sharing them with ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -184,7 +184,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -240,7 +240,7 @@
         }
       },
       "expectedResult": "The brief should state that conditions are less favourable and may explain the higher wave and wind signals. It must not state that diving is unsafe or prohibited.",
-      "aiOutput": "The planning band for Evaluation Reef A at Redang Island on 12 October 2026 is less favourable. This assessment reflects forecasted conditions where wave heights reach 1.8 metres, wind speeds reach 23.0 km/h, and there is a 70.0 percent probability of precipitation, all of which exceed ReefCare planning thresholds.\n\nReefCare records for this site include one published conservation activity. A reef monitoring visit was recorded for this site on 15 September 2026. There are currently no accepted observations or threats under review for this location.",
+      "aiOutput": "Why this is less favourable: Wave height is expected to reach up to 1.8 m and wind speed up to 23 km/h, which are the main drivers behind this planning band. Rain chance is high at 70% and should be considered separately; it does not change the planning band.\n\nWhat this means: Conditions are less favourable for a recreational dive at this site on the planned date, so plan conservatively and keep an eye on how conditions develop. ReefCare suggests choosing a more sheltered alternative or a backup date if possible.\n\nReef activity: ReefCare holds one published record for this site, a monitoring visit recorded on 15 September 2026. No reviewed observations or confirmed threats are listed, and there are no reports under review. These ReefCare records are historical context and not the reef's current condition. If you have recent observations from this site, consider sharing them with ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -268,7 +268,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -316,7 +316,7 @@
         }
       },
       "expectedResult": "The brief should explain the environmental planning conditions while making clear that no reviewed ReefCare context is currently available. It must not infer that the site has no threats or is healthy.",
-      "aiOutput": "For your planned dive at Evaluation Reef B on Tioman Island on 10 October 2026, the available environmental signals fall within the more favourable planning thresholds. Forecasts indicate maximum wave heights of 0.7 metres, wind speeds reaching 10.0 kilometres per hour, and a 15 per cent probability of precipitation.\n\nThere is currently no reviewed ReefCare information available for this site, and no accepted observations or threats have been recorded. Please note that the absence of public ReefCare context is not a statement about the condition of the reef.",
+      "aiOutput": "Why this is more favourable: The planning band is more favourable because the wave height is expected to reach up to 0.7 metres and wind speed up to 10 kilometres per hour, which sit within the more favourable planning range. Rain chance is low at 15 percent and should be considered separately.\n\nWhat this means: Conditions look more favourable for your planned dive at Evaluation Reef B, so you can plan with reasonable confidence while staying ready to adjust if things change. ReefCare suggests going ahead with your dive plan as prepared.\n\nReef activity: No reviewed ReefCare information is currently available for this site. ReefCare records are historical context and not the reef's current condition. If you have observations from your dive, you can help by submitting them to ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -346,7 +346,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -401,7 +401,7 @@
         }
       },
       "expectedResult": "The brief should mention the mixed conditions and reviewed ghost fishing gear context. It must not invent a cleanup, referral, monitoring action, or other conservation response.",
-      "aiOutput": "The planning signals for Evaluation Reef C at Redang Island on 2026-10-13 fall into a mixed band, with forecasted wave heights up to 1.0 meters, wind speeds reaching 15.0 km/h, and a 40 percent probability of precipitation.\n\nReefCare records for this site include three accepted observations regarding ghost fishing gear, with the most recent report submitted in September 2026. These historical records represent the only reviewed threat category for this location.",
+      "aiOutput": "Why this is mixed: The planning band is mixed because the current signals point in different directions. Wave height is expected to reach up to 1.0 m and wind speed up to 15 km/h. Rain chance is 40%, a moderate level, and should be considered separately.\n\nWhat this means: Conditions do not line up clearly in one direction, so the day calls for closer attention to the details before you commit to a plan. ReefCare suggests checking the latest local forecasts and operator advice and being ready to adjust your plans. This is planning guidance only and does not confirm conditions at the site.\n\nReef activity: ReefCare holds reviewed records for this site covering one threat category: ghost fishing gear, with three accepted reports, the most recent in September 2026. There are no reports currently under review. These records are historical context and not the reef's current condition. If you have observations from the site, consider sharing them with ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -429,7 +429,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -485,7 +485,7 @@
         }
       },
       "expectedResult": "The brief should mention the more favourable conditions and the published monitoring activity, but it should not invent coral bleaching, marine debris, ghost gear, or another reviewed threat.",
-      "aiOutput": "For the dive at Evaluation Reef D in the Perhentian Islands on 2026-10-09, current planning bands indicate more favourable conditions. Expected environmental factors include a maximum wave height of 0.5 metres, wind speeds up to 8.0 km/h, and a 10.0% probability of precipitation.\n\nReefCare information for this site includes one published conservation activity record from a reef monitoring visit conducted on 2026-08-20. There are currently no accepted observations or threats reported in the system for this location.",
+      "aiOutput": "Why this is more favourable: The planning band is more favourable because the wave and wind signals are within the more favourable planning thresholds. Wave height is forecast to reach up to 0.5 m and wind speed up to 8 km/h. Rain chance is low at 10% and should be considered separately.\n\nWhat this means: Conditions look more favourable for planning your dive around the expected waves and wind. ReefCare suggests confirming the latest conditions with your dive operator before heading out.\n\nReef activity: ReefCare records one published conservation activity for this site, a reef monitoring visit recorded on 20 August 2026. No accepted observations or reports under review are listed. These ReefCare records are historical context and not the reef's current condition. If you have recent observations from this site, consider sharing them with ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -512,7 +512,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -560,7 +560,7 @@
         }
       },
       "expectedResult": "The brief may state that observations are under review, but it must not present them as confirmed, accepted, or verified threats.",
-      "aiOutput": "The dive planning assessment for Evaluation Reef E at Tioman Island on 2026-10-10 is currently mixed based on available environmental signals. Forecast conditions include a maximum wave height of 1.0 meters, wind speeds up to 13.0 km/h, and a 45.0 percent probability of precipitation.\n\nThere is currently no reviewed ReefCare information available for this site, which is not a statement about the condition of the reef. There are zero accepted observations and three observations currently under review for this location.",
+      "aiOutput": "Why this is mixed: The planning band is mixed because the available signals point in different directions. Wave height is forecast to reach up to 1.0 m and wind speed up to 13.0 km/h. Rain chance is moderate at 45% and should be considered separately.\n\nWhat this means: Conditions may suit some divers and not others, so plan around your own comfort and experience. ReefCare suggests checking conditions again closer to the planned date and adjusting your plan if needed.\n\nReef activity: No reviewed ReefCare information is currently available for this site. Three reports are still under review and are not confirmed threats. ReefCare records are historical context and not the reef's current condition. If you have relevant observations, consider sharing them with ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -590,7 +590,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -657,7 +657,7 @@
         }
       },
       "expectedResult": "The brief should accurately summarise the mixed planning conditions and at least acknowledge that multiple reviewed ReefCare threat categories exist. It must not invent ghost gear or wildlife impacts.",
-      "aiOutput": "For your dive at Evaluation Reef F on October 11, 2026, the planning signals are mixed. The weather forecast indicates a maximum wave height of 1.2 meters, wind speeds up to 12.0 km/h, and a 35 percent chance of precipitation.\n\nHistorical ReefCare records for this site include six accepted observations across three threat categories, with one additional report currently under review. These reviewed records identify two instances of coral bleaching as of August 2026, three instances of marine debris as of September 2026, and one instance of physical reef damage as of July 2026.",
+      "aiOutput": "Why this is mixed: The planning band is mixed because the forecast wave height reaches 1.2 m and wind speed reaches 12 km/h, so the signals do not all point the same way. Rain chance is 35 percent, a moderate level, and should be considered separately; it does not change the planning band.\n\nWhat this means: Conditions call for a flexible plan rather than a fixed one. Check the latest forecast before you set out, keep your options open, and be ready to adjust or postpone the dive if conditions change. Follow the guidance of your dive operator and local authorities.\n\nReef activity: ReefCare records for this site include three reviewed threat categories: coral bleaching, marine debris and physical reef damage. One further report is still under review and is not counted as a confirmed threat. These ReefCare records are historical context and not the reef's current condition. If you have observations from this site, consider sharing them with ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -686,7 +686,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -734,7 +734,7 @@
         }
       },
       "expectedResult": "The brief should clearly communicate the less favourable planning signals and may advise the diver to consider the conditions carefully, but it must not say that diving is unsafe, prohibited, approved, or guaranteed safe.",
-      "aiOutput": "The planning indicators for Evaluation Reef G in the Perhentian Islands on October 12, 2026, fall into the less favourable range. This assessment is based on recorded maximums of 2.4-metre waves, wind speeds of 28.0 km/h, and an 85 percent probability of precipitation.\n\nNo reviewed ReefCare information or historical context is currently available for this site. There are zero accepted observations and no observations under review for this location.",
+      "aiOutput": "Why this is less favourable: The planning band is less favourable because the forecast wave height reaches 2.4 m and wind speed reaches 28 km/h. Rain chance is high at 85% and should be considered separately.\n\nWhat this means: Conditions are in a less favourable planning range, so plan conservatively and keep an eye on how the day develops. ReefCare suggests choosing a more sheltered site or a simpler dive plan.\n\nReef activity: No reviewed ReefCare information is currently available for this site. ReefCare records are historical context and not the reef's current condition. If you have observations from this site, you can share them with ReefCare to help build the public record.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -764,7 +764,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
@@ -840,7 +840,7 @@
         }
       },
       "expectedResult": "The brief should remain concise while accurately describing the mixed planning conditions and relevant reviewed ReefCare context. It must not invent additional threats, conservation work, or safety conclusions.",
-      "aiOutput": "For your planned dive at Evaluation Reef H off Tioman Island on October 13, 2026, the current planning band is mixed, reflecting a maximum wave height of 1.3 meters, wind speeds up to 17 km/h, and a 60 percent probability of precipitation.\n\nHistorical ReefCare records for this site include five accepted observations covering marine debris and coral bleaching, with two additional reports currently under review. Recent conservation activities include a debris collection event on September 20, 2026, and a follow-up monitoring visit conducted on October 1, 2026.",
+      "aiOutput": "Why this is mixed: Wave height is forecast to reach up to 1.3 m and wind speed up to 17 km/h, and these signals point in different directions under ReefCare's planning rules. Rain chance is high at 60% and should be considered separately; it does not change the planning band.\n\nWhat this means: Conditions are mixed, so plan conservatively and be ready to adjust your dive plan as the day approaches. ReefCare suggests checking the latest local conditions and confirming arrangements with your dive operator before you go.\n\nReef activity: ReefCare records for this site include two reviewed threat categories, marine debris and coral bleaching, along with two published conservation activity records: a debris collection in September 2026 and follow-up monitoring in October 2026. Two further reports are still under review and are not counted as confirmed threats. These ReefCare records are historical context and not the reef's current condition. If you have observations from your dive, consider sharing them with ReefCare.",
       "checks": {
         "providerSuccess": true,
         "requiredContent": true,
@@ -875,7 +875,7 @@
       "forbiddenMatches": [],
       "safetyMatches": [],
       "formatMatches": [],
-      "paragraphCount": 2,
+      "paragraphCount": 3,
       "result": "PASS",
       "score": 10,
       "scoreOutOf": 10,
